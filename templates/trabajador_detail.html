@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.nombre }} · {{ title }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Trabajador</span>
+    <h1>{{ detail.nombre }}</h1>
+    <p class="muted">
+      {% if detail.matched %}
+        <span class="badge ok">Casado en Sigrid{% if detail.codigo %} · {{ detail.codigo }}{% endif %}</span>
+      {% else %}
+        <span class="badge danger">Sin casar en Sigrid</span>
+      {% endif %}
+      {% if detail.dni %} · DNI {{ detail.dni }}{% endif %}
+    </p>
+  </div>
+  <a class="btn secondary" href="/trabajadores">← Trabajadores</a>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <span class="stat-label">Horas ordinarias</span>
+    <span class="stat-value">{{ detail.horas_normales|horas }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Horas extra</span>
+    <span class="stat-value">{{ detail.horas_extra|horas }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Incidencias</span>
+    <span class="stat-value">{{ detail.num_incidencias }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Registros</span>
+    <span class="stat-value">{{ detail.registros|length }}</span>
+  </div>
+</div>
+
+{% if calendar %}
+<div class="panel cal-panel">
+  <div class="panel-header cal-head">
+    <div>
+      <h2>Calendario · {{ calendar.label }}</h2>
+      <p class="muted small">{{ calendar.range_label }} · del 16 al 15</p>
+    </div>
+    {% if period_options %}
+    <form method="get" action="/trabajadores/{{ detail.worker_key }}" class="cal-period">
+      <label class="small muted" for="period">Mes</label>
+      <select class="combo" id="period" name="period" onchange="this.form.submit()">
+        {% for opt in period_options %}
+        <option value="{{ opt.key }}" {% if opt.key == selected_period %}selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="cal-legend">
+    <span><i class="dot dot-normal"></i> Ordinarias</span>
+    <span><i class="dot dot-extra"></i> Extra</span>
+    <span><i class="dot dot-inc"></i> Incidencia</span>
+    <span><i class="swatch swatch-off"></i> Findes / festivos</span>
+  </div>
+
+  <div class="cal-grid">
+    <div class="cal-weekday">L</div><div class="cal-weekday">M</div>
+    <div class="cal-weekday">X</div><div class="cal-weekday">J</div>
+    <div class="cal-weekday">V</div>
+    <div class="cal-weekday cal-weekend">S</div>
+    <div class="cal-weekday cal-weekend">D</div>
+
+    {% for week in calendar.weeks %}
+      {% for day in week %}
+      <div class="cal-day{% if not day.in_period %} cal-out{% endif %}{% if day.in_period and (day.is_weekend or day.is_holiday) %} cal-off{% endif %}"
+           {% if day.is_holiday and day.holiday_name %}title="{{ day.holiday_name }}"{% endif %}>
+        <span class="cal-num">{{ day.day }}</span>
+        {% if day.in_period %}
+          {% if day.is_holiday %}<span class="cal-fest" title="{{ day.holiday_name }}">●</span>{% endif %}
+          <div class="cal-hours">
+            {% if day.normal_h %}<span class="cal-h cal-h-normal">{{ day.normal_h|horas }}</span>{% endif %}
+            {% if day.extra_h %}<span class="cal-h cal-h-extra">{{ day.extra_h|horas }}</span>{% endif %}
+            {% if day.incidencias %}<span class="cal-h cal-h-inc">{{ day.incidencias }} inc.</span>{% endif %}
+          </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% endfor %}
+  </div>
+
+  <div class="cal-totals">
+    <span><strong>{{ calendar.total_normal|horas }}</strong> ordinarias</span>
+    <span><strong>{{ calendar.total_extra|horas }}</strong> extra</span>
+    {% if calendar.total_incidencias %}<span><strong>{{ calendar.total_incidencias }}</strong> incidencias</span>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if not sigrid_enabled %}
+<div class="alert info">El desplegable de codigo de hora esta vacio: Sigrid no esta configurado en este portal (variables <code>SIGRID_API_*</code>).</div>
+{% endif %}
+
+<div class="panel">
+  <div class="panel-header"><h2>Registros horarios</h2></div>
+  <table class="table lines-table" id="lines-table">
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>Obra</th>
+        <th>Categoria</th>
+        <th>Tipo</th>
+        <th class="num">Horas</th>
+        <th>Codigo de hora (Sigrid)</th>
+        <th>Firma parte</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in detail.registros %}
+      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}">
+        <td class="cell-fecha">
+          <input type="date" class="fecha-edit cell-edit"
+                 data-document-id="{{ r.document_id }}"
+                 value="{{ r.fecha or '' }}">
+          <a class="row-detail" href="/partes/{{ r.document_id }}" title="Abrir detalle del parte">↗</a>
+        </td>
+        <td class="cell-obra">
+          {% if sigrid_enabled %}
+          <div class="combo-obra" data-document-id="{{ r.document_id }}"
+               data-codigo="{{ r.obra_codigo or '' }}">
+            <input type="text" class="combo-input cell-edit" autocomplete="off"
+                   value="{% if r.obra_codigo %}{{ r.obra_codigo }} · {{ r.obra_nombre or '' }}{% else %}{{ r.obra_nombre or '' }}{% endif %}"
+                   placeholder="Obra…">
+            <div class="combo-panel" hidden></div>
+          </div>
+          {% else %}
+            {{ r.obra_codigo or "—" }}
+            {% if r.obra_nombre %}<div class="cell-sub">{{ r.obra_nombre }}</div>{% endif %}
+          {% endif %}
+        </td>
+        <td>{{ r.categoria or "—" }}</td>
+        <td>
+          {% if r.es_incidencia %}
+            <span class="badge warn" title="{{ r.incidencia_texto or '' }}">{{ r.incidencia_codigo }} · {{ r.incidencia_codigo|incidencia }}</span>
+          {% elif r.hora_ext == 1 or r.tipo_hora == 'extra' %}
+            <span class="badge extra">Extra</span>
+          {% else %}
+            <span class="badge normal">Ordinaria</span>
+          {% endif %}
+        </td>
+        <td class="num cell-horas">
+          <input type="number" step="0.5" min="0" class="horas-edit cell-edit cell-edit-num"
+                 data-registro-id="{{ r.id }}"
+                 value="{{ r.horas if r.horas is not none else '' }}">
+        </td>
+        <td>
+          <select class="combo combo-hora" data-registro-id="{{ r.id }}"
+                  data-current="{{ r.hora_ide if r.hora_ide is not none else '' }}">
+            <option value="">— sin asignar —</option>
+          </select>
+          <div class="cell-sub combo-hora-current">
+            {% if r.hora_codigo %}{{ r.hora_codigo }} · {{ r.hora_descripcion or '' }}{% else %}—{% endif %}
+            {% if r.hora_match_method in ['categoria_normal', 'categoria_extra', 'categoria_extra_a_normal', 'extra_por_categoria', 'incidencia', 'incidencia_desc', 'ext_default', 'ext_first'] %}<span class="tag-auto" title="Asignado por matcheo determinista ({{ r.hora_match_method }})">auto</span>{% elif r.hora_match_method == 'codigo_propuesto' %}<span class="tag-ia" title="Propuesto por la IA - conviene revisar">IA</span>{% elif r.hora_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
+          </div>
+        </td>
+        <td>
+          {% if r.parte_firmado %}
+            <span class="badge ok" title="Firmado{% if r.parte_firmante_rol %} · {{ r.parte_firmante_rol }}{% endif %}">Firmado</span>
+          {% else %}
+            <span class="badge danger">Sin firma</span>
+          {% endif %}
+          {% if r.parte_aprobado %}<span class="badge ok">Aprobado</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
+{% endblock %}

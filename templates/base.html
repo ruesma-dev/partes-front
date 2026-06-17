@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ title }}{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', path='styles.css') }}?v={{ asset_version }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a class="topbar__brand" href="/trabajadores">
+        <img class="topbar__logo" src="{{ url_for('static', path='img/logo-ruesma.png') }}" alt="Ruesma">
+        <span class="topbar__sep"></span>
+        <span class="topbar__tag">Partes de Trabajo</span>
+      </a>
+      <nav class="topnav">
+        <a href="/trabajadores"{% if request.url.path.startswith('/trabajadores') %} class="is-active"{% endif %}>Trabajadores</a>
+        <a href="/partes"{% if request.url.path.startswith('/partes') %} class="is-active"{% endif %}>Partes</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page-shell">
+    <div class="container">
+      {% if message %}
+      <div class="alert success" role="status">{{ message }}</div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

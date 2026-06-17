@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Parte {{ parte.fecha|fecha }} · {{ title }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Parte diario</span>
+    <h1>{{ parte.fecha|fecha }}</h1>
+    <p class="muted">
+      {% if parte.obra_codigo %}<strong>{{ parte.obra_codigo }}</strong>{% endif %}
+      {{ parte.obra_nombre or parte.obra_numero_leido or "" }}
+    </p>
+  </div>
+  <div class="header-actions">
+    {% if parte.sharepoint_url %}
+    <a class="btn primary" href="{{ parte.sharepoint_url }}" target="_blank" rel="noopener">Abrir en SharePoint ↗</a>
+    {% endif %}
+    <a class="btn secondary" href="/partes">← Partes</a>
+  </div>
+</div>
+
+<div class="info-grid">
+  <div class="info-item">
+    <span class="info-k">Fecha</span>
+    <span class="info-v">
+      <input type="date" class="fecha-edit" id="fechaEdit"
+             data-document-id="{{ parte.document_id }}"
+             data-status="fechaStatus"
+             value="{{ parte.fecha or '' }}">
+      <span class="edit-status" id="fechaStatus"></span>
+    </span>
+  </div>
+  <div class="info-item info-item-wide">
+    <span class="info-k">Obra</span>
+    <span class="info-v">
+      <div class="combo-obra" id="obraEdit"
+           data-document-id="{{ parte.document_id }}"
+           data-status="obraStatus"
+           data-codigo="{{ parte.obra_codigo or '' }}">
+        <input type="text" class="combo-input" autocomplete="off"
+               value="{% if parte.obra_codigo %}{{ parte.obra_codigo }} · {{ parte.obra_nombre or '' }}{% else %}{{ parte.obra_nombre or parte.obra_numero_leido or '' }}{% endif %}"
+               placeholder="Escribe codigo o nombre de obra…">
+        <div class="combo-panel" hidden></div>
+      </div>
+      <span class="edit-status" id="obraStatus"></span>
+      {% if parte.obra_numero_leido and not parte.obra_codigo %}
+        <span class="cell-sub">Leido: {{ parte.obra_numero_leido }} (sin casar)</span>
+      {% endif %}
+    </span>
+  </div>
+  <div class="info-item"><span class="info-k">Encargado</span><span class="info-v">{{ parte.encargado_nombre or "—" }}</span></div>
+  <div class="info-item"><span class="info-k">Jefe de obra</span><span class="info-v">{{ parte.jefe_obra_nombre or "—" }}</span></div>
+  <div class="info-item">
+    <span class="info-k">Firmas</span>
+    <span class="info-v firma-boxes">
+      <span class="firma-box {% if parte.firma_encargado %}on{% endif %}">{% if parte.firma_encargado %}✓{% else %}✗{% endif %} Encargado</span>
+      <span class="firma-box {% if parte.firma_jefe_obra %}on{% endif %}">{% if parte.firma_jefe_obra %}✓{% else %}✗{% endif %} Jefe de obra</span>
+      <span class="firma-box {% if parte.firma_administracion %}on{% endif %}">{% if parte.firma_administracion %}✓{% else %}✗{% endif %} Administracion</span>
+      {% if not parte.firmado %}<span class="cell-sub">Sin ninguna firma</span>{% endif %}
+      {% if parte.firmante_nombre %}<span class="cell-sub">Firmante: {{ parte.firmante_nombre }}</span>{% endif %}
+    </span>
+  </div>
+  <div class="info-item">
+    <span class="info-k">Estado</span>
+    <span class="info-v">
+      {% if parte.approved %}
+        <span class="badge ok">Aprobado</span>{% if parte.approved_by %} por {{ parte.approved_by }}{% endif %}
+      {% elif parte.review_required %}
+        <span class="badge warn">Requiere revision</span>
+      {% else %}
+        <span class="badge info">Pendiente</span>
+      {% endif %}
+    </span>
+  </div>
+</div>
+
+{% if not sigrid_enabled %}
+<div class="alert info">El desplegable de codigo de hora esta vacio: Sigrid no esta configurado (variables <code>SIGRID_API_*</code>).</div>
+{% endif %}
+
+<div class="panel pdf-panel">
+  <div class="panel-header pdf-head">
+    <h2>Documento del parte (PDF)</h2>
+    {% if preview_enabled %}
+    <button type="button" class="btn secondary small" id="pdfToggle" data-collapsed="0">Ocultar PDF</button>
+    {% endif %}
+  </div>
+  {% if preview_enabled %}
+  <div class="pdf-wrap" id="pdfWrap">
+    <iframe class="pdf-frame" id="pdfFrame"
+            src="{{ preview_url }}#toolbar=1&navpanes=0&view=FitH"
+            title="PDF del parte"></iframe>
+  </div>
+  {% elif parte.sharepoint_url %}
+  <div class="empty-state">
+    El visor embebido no esta activo en el portal (falta <code>GRAPH_KEY</code>).
+    Usa el boton <strong>Abrir en SharePoint</strong> de arriba.
+  </div>
+  {% else %}
+  <div class="empty-state">
+    Este parte no tiene PDF archivado en SharePoint (se proceso sin archivar o
+    antes de activarlo). Reprocesalo para poder visualizarlo aqui.
+  </div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Personal ({{ parte.empleados|length }})</h2></div>
+  {% if parte.empleados %}
+    {% for emp in parte.empleados %}
+    <div class="emp-block">
+      <div class="emp-head">
+        <div>
+          <span class="emp-name">{{ emp.empleado_nombre or emp.nombre_leido or "(sin nombre)" }}</span>
+          {% if emp.categoria %}<span class="emp-cat">{{ emp.categoria }}</span>{% endif %}
+        </div>
+        <div>
+          {% if emp.matched %}
+            <span class="badge ok">Casado en Sigrid</span>
+          {% else %}
+            <span class="badge danger">Sin casar</span>
+          {% endif %}
+          {% if emp.empleado_nombre and emp.nombre_leido and emp.empleado_nombre != emp.nombre_leido %}
+            <span class="cell-sub">Leido: {{ emp.nombre_leido }}</span>
+          {% endif %}
+        </div>
+      </div>
+      <table class="table lines-table">
+        <thead>
+          <tr>
+            <th>Tipo</th>
+            <th class="num">Horas</th>
+            <th>Codigo de hora (Sigrid)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in emp.registros %}
+          <tr data-registro-id="{{ r.id }}">
+            <td>
+              {% if r.es_incidencia %}
+                <span class="badge warn" title="{{ r.incidencia_texto or '' }}">{{ r.incidencia_codigo }} · {{ r.incidencia_codigo|incidencia }}</span>
+              {% elif r.hora_ext == 1 or r.tipo_hora == 'extra' %}
+                <span class="badge extra">Extra</span>
+              {% else %}
+                <span class="badge normal">Ordinaria</span>
+              {% endif %}
+            </td>
+            <td class="num cell-horas">
+              <input type="number" step="0.5" min="0" class="horas-edit cell-edit cell-edit-num"
+                     data-registro-id="{{ r.id }}"
+                     value="{{ r.horas if r.horas is not none else '' }}">
+            </td>
+            <td>
+              <select class="combo combo-hora" data-registro-id="{{ r.id }}"
+                      data-current="{{ r.hora_ide if r.hora_ide is not none else '' }}">
+                <option value="">— sin asignar —</option>
+              </select>
+              <div class="cell-sub combo-hora-current">
+                {% if r.hora_codigo %}{{ r.hora_codigo }} · {{ r.hora_descripcion or '' }}{% else %}—{% endif %}
+                {% if r.hora_match_method in ['categoria_normal', 'categoria_extra', 'categoria_extra_a_normal', 'extra_por_categoria', 'incidencia', 'incidencia_desc', 'ext_default', 'ext_first'] %}<span class="tag-auto" title="Asignado por matcheo determinista ({{ r.hora_match_method }})">auto</span>{% elif r.hora_match_method == 'codigo_propuesto' %}<span class="tag-ia" title="Propuesto por la IA - conviene revisar">IA</span>{% elif r.hora_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+  {% else %}
+    <p class="muted" style="padding:16px 18px;">El parte no tiene lineas de personal.</p>
+  {% endif %}
+</div>
+
+<div class="action-bar">
+  {% if parte.approved %}
+  <form method="post" action="/documents/{{ parte.document_id }}/unapprove">
+    <input type="hidden" name="back" value="{{ back }}">
+    <button class="btn secondary" type="submit">Marcar pendiente</button>
+  </form>
+  {% else %}
+  <form method="post" action="/documents/{{ parte.document_id }}/approve">
+    <input type="hidden" name="back" value="{{ back }}">
+    <button class="btn success" type="submit">Aprobar parte</button>
+  </form>
+  {% endif %}
+  <form method="post" action="/documents/{{ parte.document_id }}/delete"
+        onsubmit="return confirm('¿Mover este parte a la papelera?');">
+    <input type="hidden" name="back" value="{{ back }}">
+    <button class="btn danger" type="submit">Borrar</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
+{% endblock %}

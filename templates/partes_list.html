@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Partes diarios</span>
+    <h1>Partes</h1>
+    <p class="muted">Un parte por dia y obra. Aqui se revisa la firma y se aprueba.</p>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <span class="stat-label">Partes</span>
+    <span class="stat-value">{{ partes|length }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Pendientes</span>
+    <span class="stat-value">{{ total_pendientes }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Sin firmar</span>
+    <span class="stat-value">{{ total_sin_firmar }}</span>
+  </div>
+</div>
+
+<form class="toolbar" method="get" action="/partes">
+  <input class="input" type="search" name="search" value="{{ search }}"
+         placeholder="Buscar por obra, encargado o fecha…" autocomplete="off">
+  <label class="check">
+    <input type="checkbox" name="pendientes" value="1" {% if only_pending %}checked{% endif %}
+           onchange="this.form.submit()">
+    Solo pendientes
+  </label>
+  <button class="btn primary small" type="submit">Buscar</button>
+  {% if search %}<a class="btn secondary small" href="/partes">Limpiar</a>{% endif %}
+</form>
+
+{% if partes %}
+<div class="panel">
+  <table class="table docs-table">
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>Obra</th>
+        <th>Encargado</th>
+        <th class="num">Empl.</th>
+        <th class="num">Ordin.</th>
+        <th class="num">Extra</th>
+        <th>Firma</th>
+        <th>Estado</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in partes %}
+      <tr>
+        <td><a class="link-strong" href="/partes/{{ p.document_id }}">{{ p.fecha|fecha }}</a></td>
+        <td>
+          {{ p.obra_codigo or "—" }}
+          {% if p.obra_nombre %}<div class="cell-sub">{{ p.obra_nombre }}</div>{% endif %}
+        </td>
+        <td>{{ p.encargado_nombre or "—" }}</td>
+        <td class="num">{{ p.num_empleados }}</td>
+        <td class="num">{{ p.horas_normales|horas }}</td>
+        <td class="num">{{ p.horas_extra|horas }}</td>
+        <td>
+          {% if p.firmado %}
+            <span class="badge ok" title="{{ p.firmante_rol or '' }}">Firmado</span>
+          {% else %}
+            <span class="badge danger">Sin firma</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if p.approved %}
+            <span class="badge ok">Aprobado</span>
+          {% elif p.review_required %}
+            <span class="badge warn">Revisar</span>
+          {% else %}
+            <span class="badge info">Pendiente</span>
+          {% endif %}
+        </td>
+        <td class="cell-actions">
+          <a class="btn secondary small" href="/partes/{{ p.document_id }}">Abrir</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">
+  <p>No hay partes{% if search %} para «{{ search }}»{% endif %}.</p>
+</div>
+{% endif %}
+{% endblock %}
