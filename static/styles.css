@@ -499,3 +499,36 @@ h1 {
 .manual-empty { color: var(--steel); font-size: 0.85rem; padding: 4px 2px; }
 .recon-status { margin-top: 8px; font-size: 0.85rem; font-weight: 600; color: var(--steel); }
 .recon-status.error { color: var(--danger, #b3261e); }
+
+/* ============ Combo de EMPLEADO (reasignar trabajador) ============ */
+.combo-emp { position: relative; display: inline-block; min-width: 220px; max-width: 460px; width: 100%; }
+.combo-emp .combo-input {
+  font: inherit; width: 100%; padding: 6px 9px; border-radius: 8px;
+  border: 1px solid var(--line-strong); background: var(--paper); color: var(--ink);
+}
+.combo-emp .combo-input:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.combo-emp .combo-input.saved { border-color: var(--ok-border); box-shadow: 0 0 0 3px var(--ok-soft); }
+.combo-emp .combo-input.error { border-color: var(--danger-border); box-shadow: 0 0 0 3px var(--danger-soft); }
+.combo-emp .combo-panel {
+  position: fixed; z-index: 60; max-height: 320px; overflow-y: auto;
+  background: var(--paper); border: 1px solid var(--line-strong); border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(29,32,36,0.16); padding: 4px;
+}
+.combo-emp .combo-item {
+  padding: 7px 10px; border-radius: 7px; cursor: pointer; font-size: 0.86rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.combo-emp .combo-item:hover, .combo-emp .combo-item.active { background: var(--brand-soft); color: var(--brand); }
+.combo-emp .combo-item .ci-score { font-weight: 700; color: var(--steel); margin-right: 4px; }
+.combo-emp .combo-item .cell-sub { display: inline; margin-left: 6px; }
+.combo-emp .combo-msg { padding: 8px 10px; color: var(--steel); font-size: 0.85rem; }
+.combo-emp-hidden { display: none; }
+
+.trab-name-row { display: flex; align-items: center; gap: 8px; }
+.name-edit-toggle {
+  border: 1px solid var(--line); background: var(--paper); color: var(--steel);
+  border-radius: 6px; padding: 0 6px; line-height: 1.6; cursor: pointer; font-size: 0.82rem;
+}
+.name-edit-toggle:hover { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
+.cell-trab-name .combo-emp { margin-top: 6px; }
+.cell-trabajador { min-width: 240px; }

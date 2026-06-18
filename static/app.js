@@ -487,6 +487,149 @@
     });
   }
 
+  // ---------------------------------------------------------------- //
+  // Combo de EMPLEADO (autocompletar sobre el maestro activo de Sigrid)
+  // para reasignar el trabajador de un registro / grupo. Busca en
+  // servidor (/api/conciliacion/buscar). Al elegir, reasigna y recarga.
+  // ---------------------------------------------------------------- //
+  function _empReasignar(wrap, ide, label) {
+    var body = { ide: ide };
+    if (wrap.getAttribute("data-registro-id"))
+      body.registro_id = parseInt(wrap.getAttribute("data-registro-id"), 10);
+    else if (wrap.getAttribute("data-worker-key"))
+      body.worker_key = wrap.getAttribute("data-worker-key");
+    else if (wrap.getAttribute("data-nombre-leido"))
+      body.nombre_leido = wrap.getAttribute("data-nombre-leido");
+    var input = wrap.querySelector(".combo-input");
+    if (input) { input.disabled = true; input.value = label; }
+    fetch("/api/empleado/reasignar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.d.ok) throw new Error((res.d && res.d.error) || "Error");
+        flashEl(input, "saved");
+        // El agrupado por trabajador cambia: recargamos para reflejarlo.
+        window.location.reload();
+      }).catch(function () {
+        flashEl(input, "error");
+        if (input) input.disabled = false;
+      });
+  }
+
+  var EMP_URL = "/api/sigrid/empleados";
+  var _empCache = null;
+
+  function fetchEmpleados() {
+    if (_empCache) return Promise.resolve(_empCache);
+    return fetch(EMP_URL, { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        _empCache = (data && data.ok && data.items) ? data.items : [];
+        return _empCache;
+      }).catch(function () { _empCache = []; return _empCache; });
+  }
+
+  function empLabel(e) {
+    return (e.codigo ? e.codigo + " · " : "") + (e.nombre || "");
+  }
+
+  function wireEmpleadoCombo(wrap) {
+    var input = wrap.querySelector(".combo-input");
+    var panel = wrap.querySelector(".combo-panel");
+    if (!input || !panel) return;
+    var shown = [];
+    var activeIdx = -1;
+    var repos = null;
+
+    function place() {
+      var r = input.getBoundingClientRect();
+      panel.style.top = (r.bottom + 4) + "px";
+      panel.style.left = r.left + "px";
+      panel.style.minWidth = Math.max(r.width, 320) + "px";
+      panel.style.maxWidth = "560px";
+    }
+    function close() {
+      panel.hidden = true; activeIdx = -1;
+      if (repos) {
+        window.removeEventListener("scroll", repos, true);
+        window.removeEventListener("resize", repos);
+        repos = null;
+      }
+    }
+    function render() {
+      panel.innerHTML = "";
+      if (!shown.length) {
+        var d = document.createElement("div");
+        d.className = "combo-msg";
+        d.textContent = _empCache === null ? "Cargando empleados…" : "Sin coincidencias";
+        panel.appendChild(d);
+      } else {
+        shown.forEach(function (e, i) {
+          var it = document.createElement("div");
+          it.className = "combo-item" + (i === activeIdx ? " active" : "");
+          it.innerHTML = _esc(empLabel(e)) +
+            (e.dni ? ' <span class="cell-sub">DNI ' + _esc(e.dni) + '</span>' : '');
+          it.addEventListener("mousedown", function (ev) {
+            ev.preventDefault(); _empReasignar(wrap, e.ide, empLabel(e));
+          });
+          panel.appendChild(it);
+        });
+      }
+      panel.hidden = false; place();
+      if (!repos) {
+        repos = function (ev) {
+          if (ev && ev.type === "scroll" && ev.target && panel.contains(ev.target)) return;
+          close();
+        };
+        window.addEventListener("scroll", repos, true);
+        window.addEventListener("resize", repos);
+      }
+    }
+    function open() {
+      fetchEmpleados().then(function (emps) {
+        var tokens = _norm(input.value).split(/\s+/).filter(Boolean);
+        shown = emps.filter(function (e) {
+          if (!tokens.length) return true;
+          var hay = _norm(empLabel(e) + " " + (e.dni || ""));
+          return tokens.every(function (t) { return hay.indexOf(t) !== -1; });
+        }).slice(0, 100);
+        activeIdx = -1;
+        render();
+      });
+    }
+
+    input.addEventListener("focus", function () { input.select(); open(); });
+    input.addEventListener("click", open);
+    input.addEventListener("input", open);
+    input.addEventListener("keydown", function (e) {
+      if (panel.hidden) { if (e.key === "ArrowDown" || e.key === "Enter") open(); return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); activeIdx = Math.min(activeIdx + 1, shown.length - 1); render(); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); activeIdx = Math.max(activeIdx - 1, 0); render(); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        if (activeIdx >= 0 && shown[activeIdx]) _empReasignar(wrap, shown[activeIdx].ide, empLabel(shown[activeIdx]));
+      } else if (e.key === "Escape") { close(); }
+    });
+    input.addEventListener("blur", function () { setTimeout(close, 150); });
+  }
+
+  function wireNameEditToggles() {
+    document.querySelectorAll(".name-edit-toggle").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var cell = btn.closest("td") || btn.parentElement;
+        var combo = cell ? cell.querySelector(".combo-emp") : null;
+        if (!combo) return;
+        combo.classList.toggle("combo-emp-hidden");
+        if (!combo.classList.contains("combo-emp-hidden")) {
+          var inp = combo.querySelector(".combo-input");
+          if (inp) inp.focus();
+        }
+      });
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Toggle del visor de PDF.
     var pdfBtn = document.getElementById("pdfToggle");
@@ -511,6 +654,8 @@
     document.querySelectorAll(".combo-obra").forEach(wireObraCombo);
     document.querySelectorAll("table").forEach(wireColumnFilters);
     document.querySelectorAll("table.filterable:not(.matrix)").forEach(wireSortable);
+    document.querySelectorAll(".combo-emp").forEach(wireEmpleadoCombo);
+    wireNameEditToggles();
     wireConciliacion();
 
     var combos = Array.prototype.slice.call(document.querySelectorAll(".combo-hora"));

@@ -138,7 +138,15 @@
                  value="{{ r.fecha or '' }}">
           <a class="row-detail" href="/partes/{{ r.document_id }}" title="Abrir detalle del parte">↗</a>
         </td>
-        <td>{{ r.trabajador_nombre or "—" }}</td>
+        <td class="cell-trabajador">
+          {% if sigrid_enabled %}
+          <div class="combo-emp" data-registro-id="{{ r.id }}">
+            <input type="text" class="combo-input cell-edit" autocomplete="off"
+                   value="{{ r.trabajador_nombre or '' }}" placeholder="Trabajador…">
+            <div class="combo-panel" hidden></div>
+          </div>
+          {% else %}{{ r.trabajador_nombre or "—" }}{% endif %}
+        </td>
         <td>{{ r.categoria or "—" }}</td>
         <td>
           {% if r.es_incidencia %}

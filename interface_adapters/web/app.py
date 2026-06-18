@@ -310,6 +310,7 @@ def build_app(settings: Settings) -> FastAPI:
             "total_extra": round(sum(w.horas_extra for w in workers), 2),
             "total_incidencias": sum(w.num_incidencias for w in workers),
             "sin_casar": sum(1 for w in workers if not w.matched),
+            "sigrid_enabled": settings.sigrid_lookup_enabled,
             "message": message,
         }
         return templates.TemplateResponse(
@@ -555,6 +556,63 @@ def build_app(settings: Settings) -> FastAPI:
         ]
         return JSONResponse({"ok": True, "items": items})
 
+    class ReasignarPayload(BaseModel):
+        ide: int
+        registro_id: int | None = None
+        worker_key: str | None = None
+        nombre_leido: str | None = None
+
+    @app.post("/api/empleado/reasignar")
+    def empleado_reasignar(payload: ReasignarPayload) -> JSONResponse:
+        emp = empleado_catalog.get_by_ide(payload.ide)
+        if emp is None:
+            return JSONResponse(
+                {"ok": False, "error": "Empleado no encontrado en el maestro"},
+                status_code=404,
+            )
+        updated = 0
+        leidos: list[str] = []
+        if payload.registro_id is not None:
+            leido = repository.get_registro_leido(payload.registro_id)
+            if not leido:
+                return JSONResponse(
+                    {"ok": False, "error": "Registro sin nombre leido"},
+                    status_code=400,
+                )
+            updated = repository.reassign_empleado_by_leido(
+                nombre_leido=leido, ide=emp.ide, codigo=emp.codigo,
+                nombre=emp.nombre, dni=emp.dni,
+            )
+            leidos = [leido]
+        elif payload.worker_key:
+            updated, leidos = repository.reassign_empleado_by_worker_key(
+                worker_key=payload.worker_key, ide=emp.ide, codigo=emp.codigo,
+                nombre=emp.nombre, dni=emp.dni,
+            )
+        elif payload.nombre_leido:
+            updated = repository.reassign_empleado_by_leido(
+                nombre_leido=payload.nombre_leido, ide=emp.ide,
+                codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
+            )
+            leidos = [payload.nombre_leido]
+        else:
+            return JSONResponse(
+                {"ok": False, "error": "Falta registro_id / worker_key / nombre_leido"},
+                status_code=400,
+            )
+
+        # Memoriza el/los alias (nombre leido -> empleado) para futuras ingestas.
+        for leido in leidos:
+            repository.upsert_empleado_alias(
+                nombre_leido=leido, ide=emp.ide, codigo=emp.codigo,
+                nombre=emp.nombre, dni=emp.dni, created_by="reasignacion",
+            )
+        return JSONResponse({
+            "ok": True, "updated": updated,
+            "empleado": {"ide": emp.ide, "codigo": emp.codigo,
+                         "nombre": emp.nombre},
+        })
+
     @app.get("/partes", response_class=HTMLResponse)
     def partes_list(
         request: Request,
@@ -659,6 +717,30 @@ def build_app(settings: Settings) -> FastAPI:
                 ],
             }
         )
+
+    @app.get("/api/sigrid/empleados", include_in_schema=False)
+    def sigrid_empleados() -> JSONResponse:
+        if not empleado_catalog.enabled:
+            return JSONResponse(
+                {"ok": False, "error": "Sigrid no configurado en el sv4.",
+                 "items": []}
+            )
+        try:
+            items = empleado_catalog.list()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[sigrid-lookup] empleados fallo: %r", exc)
+            return JSONResponse(
+                {"ok": False, "error": f"Error consultando Sigrid: {exc}",
+                 "items": []}
+            )
+        return JSONResponse({
+            "ok": True,
+            "items": [
+                {"ide": e.ide, "codigo": e.codigo, "nombre": e.nombre,
+                 "dni": e.dni}
+                for e in items
+            ],
+        })
 
     # ---------------- Visor del PDF del parte ------------------------ #
     @app.get("/partes/{document_id}/preview", response_class=Response)

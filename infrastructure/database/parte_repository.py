@@ -953,6 +953,65 @@ class ParteReviewRepository:
             row.created_by = created_by
             session.commit()
 
+    def get_registro_leido(self, registro_id: int) -> str | None:
+        with self._session_factory.create_session() as session:
+            r = session.get(ParteRegistroOrm, registro_id)
+            return r.trabajador_nombre_leido if r is not None else None
+
+    def reassign_empleado_by_leido(
+        self, *, nombre_leido: str, ide: int,
+        codigo: str | None, nombre: str | None, dni: str | None,
+    ) -> int:
+        """Reasigna el empleado a TODOS los registros activos cuyo nombre
+        leido (normalizado) coincide, ESTEN o no casados (correccion)."""
+        target = tm.normalize(nombre_leido)
+        if not target:
+            return 0
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteDocumentOrm.is_active.is_(True))
+            )
+            n = 0
+            for r in session.execute(stmt).scalars().all():
+                if tm.normalize(r.trabajador_nombre_leido) != target:
+                    continue
+                r.empleado_ide = ide
+                r.empleado_codigo = codigo
+                r.empleado_nombre = nombre
+                r.empleado_dni = dni
+                n += 1
+            session.commit()
+        return n
+
+    def reassign_empleado_by_worker_key(
+        self, *, worker_key: str, ide: int,
+        codigo: str | None, nombre: str | None, dni: str | None,
+    ) -> tuple[int, list[str]]:
+        """Reasigna todos los registros activos del grupo (worker_key).
+        Devuelve (filas, nombres_leidos_distintos) para escribir alias."""
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteDocumentOrm.is_active.is_(True))
+            )
+            n = 0
+            leidos: set[str] = set()
+            for r in session.execute(stmt).scalars().all():
+                if worker_key_for_registro(r) != worker_key:
+                    continue
+                if r.trabajador_nombre_leido:
+                    leidos.add(r.trabajador_nombre_leido)
+                r.empleado_ide = ide
+                r.empleado_codigo = codigo
+                r.empleado_nombre = nombre
+                r.empleado_dni = dni
+                n += 1
+            session.commit()
+        return n, sorted(leidos)
+
     def get_sharepoint_ref(self, document_id: str) -> dict | None:
         """Datos para descargar el PDF de SharePoint por Graph."""
         with self._session_factory.create_session() as session:

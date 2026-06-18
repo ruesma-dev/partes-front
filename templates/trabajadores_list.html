@@ -70,9 +70,18 @@
     <tbody>
       {% for w in workers %}
       <tr>
-        <td>
-          <a class="link-strong" href="/trabajadores/{{ w.worker_key }}">{{ w.nombre }}</a>
+        <td class="cell-trab-name">
+          <div class="trab-name-row">
+            <a class="link-strong" href="/trabajadores/{{ w.worker_key }}">{{ w.nombre }}</a>
+            {% if sigrid_enabled %}<button type="button" class="name-edit-toggle" title="Reasignar empleado">✎</button>{% endif %}
+          </div>
           {% if w.dni %}<div class="cell-sub">DNI {{ w.dni }}</div>{% endif %}
+          {% if sigrid_enabled %}
+          <div class="combo-emp combo-emp-hidden" data-worker-key="{{ w.worker_key }}" data-reload="1">
+            <input type="text" class="combo-input cell-edit" autocomplete="off" placeholder="Reasignar a…">
+            <div class="combo-panel" hidden></div>
+          </div>
+          {% endif %}
         </td>
         <td>{{ w.categoria or "—" }}</td>
         <td class="num">{{ w.num_partes }}</td>
