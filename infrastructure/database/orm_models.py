@@ -182,3 +182,20 @@ class ParteRegistroOrm(Base):
     document: Mapped[ParteDocumentOrm] = relationship(
         back_populates="registros"
     )
+
+
+class EmpleadoAliasOrm(Base):
+    """Alias aprendido: nombre LEIDO normalizado -> empleado de Sigrid.
+
+    Lo escribe la conciliacion (sv4) al confirmar un casado manual; lo lee
+    la INGESTA (sv3) antes de la similitud para casar de forma exacta las
+    variantes recurrentes de cada trabajador (OCR / caligrafia)."""
+    __tablename__ = "empleado_alias"
+
+    nombre_norm: Mapped[str] = mapped_column(String(300), primary_key=True)
+    empleado_ide: Mapped[int] = mapped_column(Integer, nullable=False)
+    empleado_codigo: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    empleado_nombre: Mapped[str | None] = mapped_column(Text, nullable=True)
+    empleado_dni: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at_utc: Mapped[str] = mapped_column(String(40), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)

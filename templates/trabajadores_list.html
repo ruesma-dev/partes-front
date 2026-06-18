@@ -6,6 +6,10 @@
     <h1>Trabajadores</h1>
     <p class="muted">Horas agregadas de todos los partes diarios, por trabajador.</p>
   </div>
+  <div class="view-toggle">
+    <a class="seg active" href="/trabajadores">Por persona</a>
+    <a class="seg" href="/obras">Por obra</a>
+  </div>
 </div>
 
 <div class="stat-grid">
@@ -40,7 +44,7 @@
 
 {% if workers %}
 <div class="panel">
-  <table class="table docs-table">
+  <table class="table docs-table filterable">
     <thead>
       <tr>
         <th>Trabajador</th>
@@ -51,6 +55,16 @@
         <th class="num">Incid.</th>
         <th>Sigrid</th>
         <th></th>
+      </tr>
+      <tr class="filter-row">
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><button type="button" class="filter-clear">Limpiar</button></th>
       </tr>
     </thead>
     <tbody>

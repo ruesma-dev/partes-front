@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Obras</span>
+    <h1>Obras</h1>
+    <p class="muted">Horas agregadas de todos los partes diarios, por obra.</p>
+  </div>
+  <div class="view-toggle">
+    <a class="seg" href="/trabajadores">Por persona</a>
+    <a class="seg active" href="/obras">Por obra</a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <span class="stat-label">Obras</span>
+    <span class="stat-value">{{ num_obras }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Horas ordinarias</span>
+    <span class="stat-value">{{ total_normales|horas }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Horas extra</span>
+    <span class="stat-value">{{ total_extra|horas }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Incidencias</span>
+    <span class="stat-value">{{ total_incidencias }}</span>
+  </div>
+</div>
+
+<form class="toolbar" method="get" action="/obras">
+  <input class="input" type="search" name="search" value="{{ search }}"
+         placeholder="Buscar por codigo o nombre de obra…" autocomplete="off">
+  <button class="btn primary small" type="submit">Buscar</button>
+  {% if search %}<a class="btn secondary small" href="/obras">Limpiar</a>{% endif %}
+</form>
+
+{% if obras %}
+<div class="panel">
+  <table class="table docs-table filterable">
+    <thead>
+      <tr>
+        <th>Obra</th>
+        <th class="num">Trabajadores</th>
+        <th class="num">Partes</th>
+        <th class="num">Ordinarias</th>
+        <th class="num">Extra</th>
+        <th class="num">Incid.</th>
+        <th></th>
+      </tr>
+      <tr class="filter-row">
+        <th><input class="col-filter" type="text" placeholder="Filtrar obra…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><button type="button" class="filter-clear">Limpiar</button></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for o in obras %}
+      <tr>
+        <td>
+          <a class="link-strong" href="/obras/{{ o.obra_key }}">
+            {% if o.obra_codigo %}{{ o.obra_codigo }} · {% endif %}{{ o.obra_nombre or "(obra sin identificar)" }}
+          </a>
+        </td>
+        <td class="num">{{ o.num_trabajadores }}</td>
+        <td class="num">{{ o.num_partes }}</td>
+        <td class="num">{{ o.horas_normales|horas }}</td>
+        <td class="num">{{ o.horas_extra|horas }}</td>
+        <td class="num">{% if o.num_incidencias %}<span class="badge warn">{{ o.num_incidencias }}</span>{% else %}—{% endif %}</td>
+        <td class="cell-actions">
+          <a class="btn secondary small" href="/obras/{{ o.obra_key }}">Ver</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty">
+  <p>No hay registros de partes todavia{% if search %} para «{{ search }}»{% endif %}.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -47,6 +47,20 @@ ORDER BY con.cod
 """
 
 
+# Empleados: emp extiende con (emp.ide = con.ide). Codigo en con.cod,
+# nombre completo en emp.res, DNI en emp.dni. Para la conciliacion de
+# trabajadores sin casar contra el maestro de Sigrid.
+_SQL_EMPLEADOS = """\
+SELECT
+    con.ide AS ide,
+    con.cod AS codigo,
+    emp.res AS nombre,
+    emp.dni AS dni
+FROM emp
+JOIN con ON emp.ide = con.ide
+"""
+
+
 @dataclass(frozen=True)
 class TipoHoraOption:
     ide: int
@@ -62,6 +76,14 @@ class ObraOption:
     ide: int | None
     codigo: str | None
     nombre: str | None
+
+
+@dataclass(frozen=True)
+class EmpleadoOption:
+    ide: int
+    codigo: str | None
+    nombre: str | None
+    dni: str | None
 
 
 class SigridLookupClient:
@@ -133,6 +155,27 @@ class SigridLookupClient:
                 )
             )
         logger.info("%s obras -> %s obras", _LOG_PREFIX, len(out))
+        return out
+
+    def fetch_empleados(self) -> list[EmpleadoOption]:
+        columns, rows = self._post_sql_read(
+            sql=_SQL_EMPLEADOS, parameters=[], label="empleados"
+        )
+        out: list[EmpleadoOption] = []
+        for row in rows:
+            rm = dict(zip(columns, row))
+            ide = _opt_int(rm.get("ide"))
+            if ide is None:
+                continue
+            out.append(
+                EmpleadoOption(
+                    ide=ide,
+                    codigo=_opt_str(rm.get("codigo")),
+                    nombre=_opt_str(rm.get("nombre")),
+                    dni=_opt_str(rm.get("dni")),
+                )
+            )
+        logger.info("%s empleados -> %s filas", _LOG_PREFIX, len(out))
         return out
 
     def _post_sql_read(

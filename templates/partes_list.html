@@ -37,7 +37,7 @@
 
 {% if partes %}
 <div class="panel">
-  <table class="table docs-table">
+  <table class="table docs-table filterable">
     <thead>
       <tr>
         <th>Fecha</th>
@@ -49,6 +49,17 @@
         <th>Firma</th>
         <th>Estado</th>
         <th></th>
+      </tr>
+      <tr class="filter-row">
+        <th><input class="col-filter" type="text" placeholder="AAAA-MM-DD"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="Firma…"></th>
+        <th><input class="col-filter" type="text" placeholder="Estado…"></th>
+        <th><button type="button" class="filter-clear">Limpiar</button></th>
       </tr>
     </thead>
     <tbody>

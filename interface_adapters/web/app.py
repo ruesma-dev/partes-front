@@ -39,7 +39,9 @@ from application.services.tipo_hora_catalog import TipoHoraCatalog
 from application.services.calendar_builder import (
     build_calendar,
     build_period_options,
+    normalize_mode,
     parse_period_key,
+    DayObra,
 )
 from application.services.holiday_provider import HolidayProvider
 from config.settings import Settings
@@ -48,6 +50,8 @@ from infrastructure.database.session_factory import SessionFactory
 from infrastructure.sigrid.sigrid_lookup_client import SigridLookupClient
 from infrastructure.graph.token_provider import GraphTokenProvider
 from application.services.obra_catalog import ObraCatalog
+from application.services.empleado_catalog import EmpleadoCatalog
+from application.services import empleado_reconciler as recon
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +233,7 @@ def build_app(settings: Settings) -> FastAPI:
         )
     catalog = TipoHoraCatalog(client=sigrid_client)
     obra_catalog = ObraCatalog(client=sigrid_client)
+    empleado_catalog = EmpleadoCatalog(client=sigrid_client)
 
     # Token provider de Graph para el visor de PDF (descarga desde SharePoint).
     graph_token_provider: GraphTokenProvider | None = None
@@ -253,6 +258,7 @@ def build_app(settings: Settings) -> FastAPI:
     app.state.repository = repository
     app.state.catalog = catalog
     app.state.obra_catalog = obra_catalog
+    app.state.empleado_catalog = empleado_catalog
     app.state.graph_token_provider = graph_token_provider
     app.state.tables_ready = tables_ready
 
@@ -315,29 +321,54 @@ def build_app(settings: Settings) -> FastAPI:
         request: Request,
         worker_key: str,
         period: str | None = Query(default=None),
+        modo: str | None = Query(default=None),
         message: str | None = Query(default=None),
     ) -> HTMLResponse:
+        mode = normalize_mode(modo)
         detail = repository.get_worker(worker_key)
         if detail is None:
             raise HTTPException(status_code=404, detail="Trabajador no encontrado")
 
-        # Agregado por dia (normal / extra / incidencias) para el calendario.
-        per_day: dict[str, dict[str, float]] = {}
+        # Agregado por dia y OBRA (para la tarjeta del calendario: el codigo
+        # de obra encima de las horas; si hay 2 obras, 2 columnas).
+        per_day: dict[str, dict] = {}
         for r in detail.registros:
             if not r.fecha:
                 continue
             slot = per_day.setdefault(
-                r.fecha, {"normal": 0.0, "extra": 0.0, "incidencias": 0}
+                r.fecha,
+                {"normal": 0.0, "extra": 0.0, "incidencias": 0, "_obras": {}},
+            )
+            okey = r.obra_codigo or r.obra_nombre or "—"
+            oslot = slot["_obras"].setdefault(
+                okey,
+                {"codigo": r.obra_codigo, "nombre": r.obra_nombre,
+                 "normal": 0.0, "extra": 0.0, "inc": 0},
             )
             if r.es_incidencia:
                 slot["incidencias"] += 1
+                oslot["inc"] += 1
             elif (r.tipo_hora or "") == "extra" or r.hora_ext == 1:
                 slot["extra"] += r.horas or 0.0
+                oslot["extra"] += r.horas or 0.0
             else:
                 slot["normal"] += r.horas or 0.0
+                oslot["normal"] += r.horas or 0.0
+
+        for slot in per_day.values():
+            obras = [
+                DayObra(
+                    obra_codigo=o["codigo"], obra_nombre=o["nombre"],
+                    normal_h=round(o["normal"], 2), extra_h=round(o["extra"], 2),
+                    incidencias=o["inc"],
+                )
+                for o in slot.pop("_obras").values()
+            ]
+            obras.sort(key=lambda x: (x.obra_codigo or "~"))
+            slot["obras"] = obras
 
         period_options = build_period_options(
-            [r.fecha for r in detail.registros]
+            [r.fecha for r in detail.registros], mode
         )
         selected = parse_period_key(period)
         if selected is None and period_options:
@@ -351,6 +382,7 @@ def build_app(settings: Settings) -> FastAPI:
                 month=m,
                 per_day=per_day,
                 holiday_name=holiday_provider.name,
+                mode=mode,
             )
 
         context = {
@@ -360,6 +392,7 @@ def build_app(settings: Settings) -> FastAPI:
             "calendar": calendar,
             "period_options": period_options,
             "selected_period": calendar.period_key if calendar else None,
+            "period_mode": mode,
             "sigrid_enabled": settings.sigrid_lookup_enabled,
             "back": f"/trabajadores/{worker_key}",
             "message": message,
@@ -369,6 +402,159 @@ def build_app(settings: Settings) -> FastAPI:
         )
 
     # ---------------- Partes diarios --------------------------------- #
+    # ----------------------------- OBRAS ----------------------------- #
+    @app.get("/obras", response_class=HTMLResponse)
+    def obras_list(
+        request: Request,
+        search: str | None = Query(default=None),
+        message: str | None = Query(default=None),
+    ) -> HTMLResponse:
+        obras = repository.list_obras(search=search)
+        context = {
+            "request": request,
+            "title": settings.app_title,
+            "obras": obras,
+            "search": search or "",
+            "total_normales": round(sum(o.horas_normales for o in obras), 2),
+            "total_extra": round(sum(o.horas_extra for o in obras), 2),
+            "total_incidencias": sum(o.num_incidencias for o in obras),
+            "num_obras": len(obras),
+            "message": message,
+        }
+        return templates.TemplateResponse(
+            request=request, name="obras_list.html", context=context
+        )
+
+    @app.get("/obras/{obra_key}", response_class=HTMLResponse)
+    def obra_detail(
+        request: Request,
+        obra_key: str,
+        period: str | None = Query(default=None),
+        modo: str | None = Query(default=None),
+        message: str | None = Query(default=None),
+    ) -> HTMLResponse:
+        mode = normalize_mode(modo)
+        detail = repository.get_obra(
+            obra_key, period_key=period, mode=mode,
+            holiday_name=holiday_provider.name,
+        )
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Obra no encontrada")
+        context = {
+            "request": request,
+            "title": settings.app_title,
+            "detail": detail,
+            "period_options": detail.period_options,
+            "selected_period": detail.period_key,
+            "period_mode": mode,
+            "sigrid_enabled": settings.sigrid_lookup_enabled,
+            "back": f"/obras/{obra_key}",
+            "message": message,
+        }
+        return templates.TemplateResponse(
+            request=request, name="obra_detail.html", context=context
+        )
+
+    # -------------------- CONCILIACION de trabajadores ---------------- #
+    class ConfirmarPayload(BaseModel):
+        nombre_leido: str
+        ide: int
+
+    @app.get("/conciliacion", response_class=HTMLResponse)
+    def conciliacion(request: Request) -> HTMLResponse:
+        pendientes = repository.list_unmatched_workers()
+        empleados = empleado_catalog.list() if empleado_catalog.enabled else []
+
+        filas: list[dict] = []
+        n_auto = n_rev = n_sin = n_cat = 0
+        for p in pendientes:
+            bucket, cands = recon.classify(p["nombre_leido"], empleados, top_n=5)
+            if bucket == "auto":
+                n_auto += 1
+            elif bucket == "revisar":
+                n_rev += 1
+            elif bucket == "categoria":
+                n_cat += 1
+            else:
+                n_sin += 1
+            filas.append({
+                "nombre_leido": p["nombre_leido"],
+                "num_registros": p["num_registros"],
+                "obras": p["obras"],
+                "categorias": p["categorias"],
+                "bucket": bucket,
+                "candidates": [
+                    {"ide": c.ide, "codigo": c.codigo, "nombre": c.nombre,
+                     "dni": c.dni, "score": round(c.score * 100)}
+                    for c in cands
+                ],
+            })
+
+        context = {
+            "request": request,
+            "title": settings.app_title,
+            "sigrid_enabled": settings.sigrid_lookup_enabled,
+            "empleados_total": len(empleados),
+            "filas": filas,
+            "n_total": len(filas),
+            "n_auto": n_auto,
+            "n_revisar": n_rev,
+            "n_sin": n_sin,
+            "n_categoria": n_cat,
+        }
+        return templates.TemplateResponse(
+            request=request, name="conciliacion.html", context=context
+        )
+
+    @app.post("/api/conciliacion/confirmar")
+    def conciliacion_confirmar(payload: ConfirmarPayload) -> JSONResponse:
+        emp = empleado_catalog.get_by_ide(payload.ide)
+        if emp is None:
+            return JSONResponse(
+                {"ok": False, "error": "Empleado no encontrado en el maestro"},
+                status_code=404,
+            )
+        updated = repository.backfill_empleado(
+            nombre_leido=payload.nombre_leido, ide=emp.ide,
+            codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
+        )
+        repository.upsert_empleado_alias(
+            nombre_leido=payload.nombre_leido, ide=emp.ide,
+            codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
+            created_by="conciliacion",
+        )
+        return JSONResponse({
+            "ok": True, "updated": updated,
+            "empleado": {"ide": emp.ide, "codigo": emp.codigo,
+                         "nombre": emp.nombre},
+        })
+
+    @app.get("/api/conciliacion/buscar")
+    def conciliacion_buscar(
+        q: str = Query(default=""),
+        nombre_leido: str | None = Query(default=None),
+    ) -> JSONResponse:
+        empleados = empleado_catalog.list() if empleado_catalog.enabled else []
+        query = (q or nombre_leido or "").strip()
+        if not query:
+            return JSONResponse({"ok": True, "items": []})
+        from application.services import text_match as _tm
+        scored = []
+        qn = _tm.normalize(query)
+        for e in empleados:
+            s = _tm.name_similarity(query, e.nombre)
+            # tambien por subcadena de codigo o nombre (busqueda manual libre)
+            sub = qn and (qn in _tm.normalize(e.nombre) or qn in _tm.normalize(e.codigo))
+            if s >= 0.30 or sub:
+                scored.append((max(s, 0.31 if sub else 0.0), e))
+        scored.sort(key=lambda t: t[0], reverse=True)
+        items = [
+            {"ide": e.ide, "codigo": e.codigo, "nombre": e.nombre,
+             "dni": e.dni, "score": round(sc * 100)}
+            for sc, e in scored[:15]
+        ]
+        return JSONResponse({"ok": True, "items": items})
+
     @app.get("/partes", response_class=HTMLResponse)
     def partes_list(
         request: Request,

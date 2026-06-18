@@ -13,6 +13,7 @@ Funciones puras (sin IO) para poder testearlas:
 """
 from __future__ import annotations
 
+import calendar as _calendar
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Callable, Iterable
@@ -21,6 +22,15 @@ _MESES = [
     "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 ]
+
+# Modos de periodo soportados.
+MODE_NOMINA = "nomina"     # del 16 del mes anterior al 15 del mes presente
+MODE_NATURAL = "natural"   # mes natural (1 al ultimo dia)
+
+
+def normalize_mode(mode: str | None) -> str:
+    return MODE_NATURAL if str(mode or "").strip().lower() == MODE_NATURAL \
+        else MODE_NOMINA
 
 
 def _iso_to_date(iso: str | None) -> date | None:
@@ -33,8 +43,14 @@ def _iso_to_date(iso: str | None) -> date | None:
         return None
 
 
-def period_of(d: date) -> tuple[int, int]:
-    """Periodo (year, month de cierre) al que pertenece la fecha."""
+def period_of(d: date, mode: str = MODE_NOMINA) -> tuple[int, int]:
+    """Periodo (year, month) al que pertenece la fecha segun el modo.
+
+    - nomina: etiquetado por el mes del dia 15 (cierre); dia>=16 -> mes sig.
+    - natural: el propio mes de la fecha.
+    """
+    if normalize_mode(mode) == MODE_NATURAL:
+        return (d.year, d.month)
     if d.day >= 16:
         m = d.month + 1
         y = d.year
@@ -45,8 +61,17 @@ def period_of(d: date) -> tuple[int, int]:
     return (d.year, d.month)
 
 
-def period_bounds(year: int, month: int) -> tuple[date, date]:
-    """Inicio (16 del mes anterior) y fin (15 del mes de cierre)."""
+def period_bounds(
+    year: int, month: int, mode: str = MODE_NOMINA
+) -> tuple[date, date]:
+    """Inicio y fin del periodo.
+
+    - nomina: 16 del mes anterior .. 15 del mes de cierre.
+    - natural: 1 .. ultimo dia del mes.
+    """
+    if normalize_mode(mode) == MODE_NATURAL:
+        last = _calendar.monthrange(year, month)[1]
+        return date(year, month, 1), date(year, month, last)
     end = date(year, month, 15)
     pm = month - 1
     py = year
@@ -64,6 +89,16 @@ class PeriodOption:
 
 
 @dataclass
+class DayObra:
+    """Desglose de horas de UNA obra dentro de un dia (para la tarjeta)."""
+    obra_codigo: str | None
+    obra_nombre: str | None
+    normal_h: float
+    extra_h: float
+    incidencias: int
+
+
+@dataclass
 class DayCell:
     date_iso: str | None
     day: int | None
@@ -74,6 +109,7 @@ class DayCell:
     normal_h: float
     extra_h: float
     incidencias: int
+    obras: list[DayObra] = field(default_factory=list)
 
 
 @dataclass
@@ -87,12 +123,14 @@ class CalendarMonth:
     total_incidencias: int = 0
 
 
-def build_period_options(fechas_iso: Iterable[str | None]) -> list[PeriodOption]:
+def build_period_options(
+    fechas_iso: Iterable[str | None], mode: str = MODE_NOMINA
+) -> list[PeriodOption]:
     periods: set[tuple[int, int]] = set()
     for iso in fechas_iso:
         d = _iso_to_date(iso)
         if d is not None:
-            periods.add(period_of(d))
+            periods.add(period_of(d, mode))
     return [
         PeriodOption(key=f"{y:04d}-{m:02d}", label=f"{_MESES[m]} {y}")
         for (y, m) in sorted(periods, reverse=True)
@@ -118,8 +156,9 @@ def build_calendar(
     month: int,
     per_day: dict[str, dict[str, float]],
     holiday_name: Callable[[date], str | None] | None = None,
+    mode: str = MODE_NOMINA,
 ) -> CalendarMonth:
-    start, end = period_bounds(year, month)
+    start, end = period_bounds(year, month, mode)
 
     # Rejilla alineada a lunes: rellena la primera y ultima semana.
     grid_start = start - timedelta(days=start.weekday())          # lunes
@@ -137,6 +176,7 @@ def build_calendar(
         n = float(agg.get("normal", 0.0))
         e = float(agg.get("extra", 0.0))
         inc = int(agg.get("incidencias", 0))
+        obras = agg.get("obras", []) if in_period else []
         name = holiday_name(d) if (in_period and holiday_name) else None
         week.append(
             DayCell(
@@ -149,6 +189,7 @@ def build_calendar(
                 normal_h=n,
                 extra_h=e,
                 incidencias=inc,
+                obras=obras,
             )
         )
         if in_period:

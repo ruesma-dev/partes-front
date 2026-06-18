@@ -21,18 +21,25 @@ from __future__ import annotations
 import logging
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Callable, Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from infrastructure.database.orm_models import (
     Base,
+    EmpleadoAliasOrm,
     ParteDocumentOrm,
     ParteRegistroOrm,
 )
 from infrastructure.database.session_factory import SessionFactory
+from application.services import text_match as tm
+from application.services.calendar_builder import (
+    build_period_options,
+    parse_period_key,
+    period_bounds,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +86,8 @@ class RegistroView:
     parte_firmado: bool
     parte_firmante_rol: Optional[str]
     parte_aprobado: bool
+    # Nombre del trabajador (para la vista por obra; opcional).
+    trabajador_nombre: Optional[str] = None
 
 
 @dataclass
@@ -148,6 +157,80 @@ class ParteDetail:
 
 
 # ------------------------------------------------------------------ #
+# DTOs de la vista por OBRA.
+# ------------------------------------------------------------------ #
+@dataclass
+class ObraRow:
+    obra_key: str
+    obra_codigo: Optional[str]
+    obra_nombre: Optional[str]
+    obra_ide: Optional[int]
+    num_trabajadores: int
+    num_partes: int
+    num_registros: int
+    horas_normales: float
+    horas_extra: float
+    num_incidencias: int
+
+
+@dataclass
+class ObraDayCol:
+    date_iso: str
+    day: int
+    is_weekend: bool
+    is_holiday: bool
+    holiday_name: Optional[str]
+
+
+@dataclass
+class ObraMatrixCell:
+    date_iso: str
+    label: str          # "8+2", "8", "+2", "V", ""
+    normal: float
+    extra: float
+    has_inc: bool
+    is_weekend: bool
+    is_holiday: bool
+
+
+@dataclass
+class ObraMatrixRow:
+    worker_key: str
+    nombre: str
+    matched: bool
+    cells: list[ObraMatrixCell]
+    total_normal: float
+    total_extra: float
+
+
+@dataclass
+class ObraColTotal:
+    date_iso: str
+    normal: float
+    extra: float
+
+
+@dataclass
+class ObraDetail:
+    obra_key: str
+    obra_codigo: Optional[str]
+    obra_nombre: Optional[str]
+    obra_ide: Optional[int]
+    mode: str
+    period_key: Optional[str]
+    period_label: Optional[str]
+    range_label: Optional[str]
+    period_options: list[Any]
+    days: list[ObraDayCol]
+    rows: list[ObraMatrixRow]
+    col_totals: list[ObraColTotal]
+    total_normal: float
+    total_extra: float
+    total_incidencias: int
+    registros: list[RegistroView] = field(default_factory=list)
+
+
+# ------------------------------------------------------------------ #
 # Helpers.
 # ------------------------------------------------------------------ #
 def _strip_accents(text: str) -> str:
@@ -169,6 +252,43 @@ def worker_key_for_registro(reg: ParteRegistroOrm) -> str:
     if nombre:
         return "nom-" + nombre.replace(" ", "_")
     return "sin-trabajador"
+
+
+def _fmt_h(x: float) -> str:
+    """Formatea horas sin decimales superfluos: 8.0->'8', 8.5->'8.5'."""
+    if x is None:
+        return ""
+    if float(x).is_integer():
+        return str(int(x))
+    return ("%g" % round(float(x), 2))
+
+
+def _cell_label(normal: float, extra: float, inc_codes: list[str]) -> str:
+    """Etiqueta de celda de la matriz: '8+2', '8', '+2', 'V', o combinada."""
+    parts: list[str] = []
+    if normal and extra:
+        parts.append(f"{_fmt_h(normal)}+{_fmt_h(extra)}")
+    elif normal:
+        parts.append(_fmt_h(normal))
+    elif extra:
+        parts.append(f"+{_fmt_h(extra)}")
+    if inc_codes:
+        uniq = sorted(set(c for c in inc_codes if c))
+        if uniq:
+            parts.append("/".join(uniq))
+    return " ".join(parts)
+
+
+def obra_key_for_registro(reg: ParteRegistroOrm) -> str:
+    """Clave estable y URL-safe para agrupar registros por obra."""
+    if reg.obra_ide is not None:
+        return f"obr-{reg.obra_ide}"
+    if reg.obra_codigo:
+        return "cod-" + _norm(reg.obra_codigo).replace(" ", "_")
+    nombre = _norm(reg.obra_nombre)
+    if nombre:
+        return "nom-" + nombre.replace(" ", "_")
+    return "sin-obra"
 
 
 def _is_extra(reg: ParteRegistroOrm) -> bool:
@@ -333,6 +453,234 @@ class ParteReviewRepository:
         detail.horas_normales = round(detail.horas_normales, 2)
         detail.horas_extra = round(detail.horas_extra, 2)
         return detail
+
+    # ----------------------------------------------------------------- #
+    # Vista por OBRA.
+    # ----------------------------------------------------------------- #
+    def list_obras(self, *, search: str | None = None) -> list[ObraRow]:
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .options(selectinload(ParteRegistroOrm.document))
+                .where(ParteDocumentOrm.is_active.is_(True))
+            )
+            regs = list(session.execute(stmt).scalars().all())
+
+        groups: dict[str, dict[str, Any]] = {}
+        for reg in regs:
+            key = obra_key_for_registro(reg)
+            g = groups.get(key)
+            if g is None:
+                g = {
+                    "obra_key": key,
+                    "obra_codigo": reg.obra_codigo,
+                    "obra_nombre": reg.obra_nombre,
+                    "obra_ide": reg.obra_ide,
+                    "trabajadores": set(),
+                    "docs": set(),
+                    "num_registros": 0,
+                    "horas_normales": 0.0,
+                    "horas_extra": 0.0,
+                    "num_incidencias": 0,
+                }
+                groups[key] = g
+            g["trabajadores"].add(worker_key_for_registro(reg))
+            g["docs"].add(reg.document_id)
+            g["num_registros"] += 1
+            if reg.es_incidencia:
+                g["num_incidencias"] += 1
+            elif _is_extra(reg):
+                g["horas_extra"] += reg.horas or 0.0
+            else:
+                g["horas_normales"] += reg.horas or 0.0
+            if not g["obra_codigo"] and reg.obra_codigo:
+                g["obra_codigo"] = reg.obra_codigo
+            if not g["obra_nombre"] and reg.obra_nombre:
+                g["obra_nombre"] = reg.obra_nombre
+
+        rows = [
+            ObraRow(
+                obra_key=g["obra_key"],
+                obra_codigo=g["obra_codigo"],
+                obra_nombre=g["obra_nombre"],
+                obra_ide=g["obra_ide"],
+                num_trabajadores=len(g["trabajadores"]),
+                num_partes=len(g["docs"]),
+                num_registros=g["num_registros"],
+                horas_normales=round(g["horas_normales"], 2),
+                horas_extra=round(g["horas_extra"], 2),
+                num_incidencias=g["num_incidencias"],
+            )
+            for g in groups.values()
+        ]
+        if search:
+            needle = _norm(search)
+            rows = [
+                r for r in rows
+                if needle in _norm(r.obra_codigo)
+                or needle in _norm(r.obra_nombre)
+            ]
+        rows.sort(key=lambda r: (_norm(r.obra_codigo) or "~", _norm(r.obra_nombre)))
+        return rows
+
+    def get_obra(
+        self,
+        obra_key: str,
+        *,
+        period_key: str | None = None,
+        mode: str = "nomina",
+        holiday_name: Callable[[date], str | None] | None = None,
+    ) -> ObraDetail | None:
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .options(selectinload(ParteRegistroOrm.document))
+                .where(ParteDocumentOrm.is_active.is_(True))
+            )
+            regs = [
+                r for r in session.execute(stmt).scalars().all()
+                if obra_key_for_registro(r) == obra_key
+            ]
+            if not regs:
+                return None
+
+            head = next(
+                (r for r in regs if r.obra_codigo or r.obra_nombre), regs[0]
+            )
+            obra_codigo = head.obra_codigo
+            obra_nombre = head.obra_nombre
+            obra_ide = head.obra_ide
+
+            period_options = build_period_options([r.fecha for r in regs], mode)
+            selected = parse_period_key(period_key)
+            if selected is None and period_options:
+                selected = parse_period_key(period_options[0].key)
+
+            views = [_registro_view(r) for r in regs]
+
+        if selected is None:
+            # Sin fechas validas: sin matriz, registros sueltos.
+            return ObraDetail(
+                obra_key=obra_key, obra_codigo=obra_codigo,
+                obra_nombre=obra_nombre, obra_ide=obra_ide, mode=mode,
+                period_key=None, period_label=None, range_label=None,
+                period_options=period_options, days=[], rows=[], col_totals=[],
+                total_normal=0.0, total_extra=0.0, total_incidencias=0,
+                registros=sorted(
+                    views, key=lambda v: ((v.fecha or ""), v.trabajador_nombre or "")
+                ),
+            )
+
+        y, m = selected
+        start, end = period_bounds(y, m, mode)
+
+        # Columnas = dias del periodo (16->15).
+        days: list[ObraDayCol] = []
+        d = start
+        while d <= end:
+            hn = holiday_name(d) if holiday_name else None
+            days.append(ObraDayCol(
+                date_iso=d.isoformat(), day=d.day,
+                is_weekend=d.weekday() >= 5,
+                is_holiday=bool(hn), holiday_name=hn,
+            ))
+            d += timedelta(days=1)
+        day_index = {dc.date_iso: i for i, dc in enumerate(days)}
+
+        def in_period(iso: str | None) -> bool:
+            return bool(iso) and iso in day_index
+
+        # Filtra registros del periodo y agrega por (trabajador, dia).
+        period_views = [v for v in views if in_period(v.fecha)]
+        # agg[worker_key] = {nombre, matched, days: {iso: {normal,extra,inc:set}}}
+        agg: dict[str, dict[str, Any]] = {}
+        for reg in regs:
+            if not in_period(reg.fecha):
+                continue
+            wk = worker_key_for_registro(reg)
+            w = agg.get(wk)
+            if w is None:
+                w = {
+                    "nombre": reg.empleado_nombre or reg.trabajador_nombre_leido
+                    or "(sin identificar)",
+                    "matched": reg.empleado_ide is not None,
+                    "days": {},
+                }
+                agg[wk] = w
+            slot = w["days"].setdefault(
+                reg.fecha, {"normal": 0.0, "extra": 0.0, "inc": []}
+            )
+            if reg.es_incidencia:
+                if reg.incidencia_codigo:
+                    slot["inc"].append(reg.incidencia_codigo)
+            elif _is_extra(reg):
+                slot["extra"] += reg.horas or 0.0
+            else:
+                slot["normal"] += reg.horas or 0.0
+
+        col_n = [0.0] * len(days)
+        col_e = [0.0] * len(days)
+        total_n = total_e = 0.0
+        total_inc = 0
+        rows: list[ObraMatrixRow] = []
+        for wk, w in agg.items():
+            cells: list[ObraMatrixCell] = []
+            row_n = row_e = 0.0
+            for dc in days:
+                slot = w["days"].get(dc.date_iso)
+                if slot is None:
+                    cells.append(ObraMatrixCell(
+                        date_iso=dc.date_iso, label="", normal=0.0, extra=0.0,
+                        has_inc=False, is_weekend=dc.is_weekend,
+                        is_holiday=dc.is_holiday,
+                    ))
+                    continue
+                n = float(slot["normal"]); e = float(slot["extra"])
+                inc = slot["inc"]
+                cells.append(ObraMatrixCell(
+                    date_iso=dc.date_iso,
+                    label=_cell_label(n, e, inc),
+                    normal=n, extra=e, has_inc=bool(inc),
+                    is_weekend=dc.is_weekend, is_holiday=dc.is_holiday,
+                ))
+                idx = day_index[dc.date_iso]
+                col_n[idx] += n; col_e[idx] += e
+                row_n += n; row_e += e
+                total_n += n; total_e += e
+                total_inc += len(inc)
+            rows.append(ObraMatrixRow(
+                worker_key=wk, nombre=w["nombre"], matched=w["matched"],
+                cells=cells, total_normal=round(row_n, 2),
+                total_extra=round(row_e, 2),
+            ))
+        rows.sort(key=lambda r: (0 if r.matched else 1, _norm(r.nombre)))
+
+        col_totals = [
+            ObraColTotal(date_iso=days[i].date_iso,
+                         normal=round(col_n[i], 2), extra=round(col_e[i], 2))
+            for i in range(len(days))
+        ]
+
+        opt = next((o for o in period_options if o.key == f"{y:04d}-{m:02d}"), None)
+        period_label = opt.label if opt else f"{y:04d}-{m:02d}"
+        range_label = (
+            f"{start.day:02d}/{start.month:02d} – {end.day:02d}/{end.month:02d}"
+        )
+
+        return ObraDetail(
+            obra_key=obra_key, obra_codigo=obra_codigo, obra_nombre=obra_nombre,
+            obra_ide=obra_ide, mode=mode, period_key=f"{y:04d}-{m:02d}",
+            period_label=period_label, range_label=range_label,
+            period_options=period_options, days=days, rows=rows,
+            col_totals=col_totals, total_normal=round(total_n, 2),
+            total_extra=round(total_e, 2), total_incidencias=total_inc,
+            registros=sorted(
+                period_views,
+                key=lambda v: ((v.fecha or ""), v.trabajador_nombre or "")
+            ),
+        )
 
     # ----------------------------------------------------------------- #
     # Listado por PARTE DIARIO.
@@ -501,6 +849,110 @@ class ParteReviewRepository:
             session.commit()
         return True
 
+    # ----------------------------------------------------------------- #
+    # Conciliacion de trabajadores SIN CASAR.
+    # ----------------------------------------------------------------- #
+    def list_unmatched_workers(self) -> list[dict]:
+        """Nombres LEIDOS sin casar (empleado_ide NULL) en registros activos,
+        agrupados por nombre normalizado, con conteo y obras/categorias."""
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteDocumentOrm.is_active.is_(True))
+                .where(ParteRegistroOrm.empleado_ide.is_(None))
+            )
+            regs = list(session.execute(stmt).scalars().all())
+
+        groups: dict[str, dict] = {}
+        for r in regs:
+            leido = (r.trabajador_nombre_leido or "").strip()
+            norm = tm.normalize(leido)
+            if not norm:
+                continue
+            g = groups.get(norm)
+            if g is None:
+                g = {
+                    "nombre_leido": leido or norm,
+                    "nombre_norm": norm,
+                    "num_registros": 0,
+                    "obras": set(),
+                    "categorias": set(),
+                }
+                groups[norm] = g
+            g["num_registros"] += 1
+            if r.obra_codigo:
+                g["obras"].add(r.obra_codigo)
+            if r.categoria:
+                g["categorias"].add(r.categoria)
+
+        out = []
+        for g in groups.values():
+            out.append({
+                "nombre_leido": g["nombre_leido"],
+                "nombre_norm": g["nombre_norm"],
+                "num_registros": g["num_registros"],
+                "obras": sorted(g["obras"]),
+                "categorias": sorted(g["categorias"]),
+            })
+        out.sort(key=lambda x: (-x["num_registros"], x["nombre_leido"].lower()))
+        return out
+
+    def count_unmatched_workers(self) -> int:
+        return len(self.list_unmatched_workers())
+
+    def backfill_empleado(
+        self, *, nombre_leido: str, ide: int,
+        codigo: str | None, nombre: str | None, dni: str | None,
+    ) -> int:
+        """Asigna el empleado a TODOS los registros activos sin casar cuyo
+        nombre leido (normalizado) coincide. Devuelve nº de filas tocadas."""
+        target = tm.normalize(nombre_leido)
+        if not target:
+            return 0
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteDocumentOrm.is_active.is_(True))
+                .where(ParteRegistroOrm.empleado_ide.is_(None))
+            )
+            regs = list(session.execute(stmt).scalars().all())
+            n = 0
+            for r in regs:
+                if tm.normalize(r.trabajador_nombre_leido) != target:
+                    continue
+                r.empleado_ide = ide
+                r.empleado_codigo = codigo
+                r.empleado_nombre = nombre
+                r.empleado_dni = dni
+                n += 1
+            session.commit()
+        return n
+
+    def upsert_empleado_alias(
+        self, *, nombre_leido: str, ide: int,
+        codigo: str | None, nombre: str | None, dni: str | None,
+        created_by: str | None = None,
+    ) -> None:
+        """Persiste/actualiza el alias (nombre leido -> empleado) para que la
+        INGESTA futura case esa variante de forma exacta."""
+        norm = tm.normalize(nombre_leido)
+        if not norm:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        with self._session_factory.create_session() as session:
+            row = session.get(EmpleadoAliasOrm, norm)
+            if row is None:
+                row = EmpleadoAliasOrm(nombre_norm=norm, created_at_utc=now)
+                session.add(row)
+            row.empleado_ide = ide
+            row.empleado_codigo = codigo
+            row.empleado_nombre = nombre
+            row.empleado_dni = dni
+            row.created_by = created_by
+            session.commit()
+
     def get_sharepoint_ref(self, document_id: str) -> dict | None:
         """Datos para descargar el PDF de SharePoint por Graph."""
         with self._session_factory.create_session() as session:
@@ -617,4 +1069,5 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
         parte_firmado=bool(doc.firmado) if doc is not None else False,
         parte_firmante_rol=doc.firmante_rol if doc is not None else None,
         parte_aprobado=bool(doc.approved) if doc is not None else False,
+        trabajador_nombre=reg.empleado_nombre or reg.trabajador_nombre_leido,
     )

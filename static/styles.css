@@ -352,3 +352,150 @@ h1 {
   border-top: 1px solid var(--line); background: #f4f5f6;
 }
 .empty-state { padding: 22px 18px; color: var(--steel); font-size: 0.9rem; }
+
+/* ---------- Toggle de vista (Persona / Obra) ---------- */
+.view-toggle {
+  display: inline-flex; border: 1px solid var(--line-strong); border-radius: 10px;
+  overflow: hidden; background: var(--paper);
+}
+.view-toggle .seg {
+  padding: 8px 14px; font-size: 0.85rem; font-weight: 600; text-decoration: none;
+  color: var(--steel); border-right: 1px solid var(--line);
+}
+.view-toggle .seg:last-child { border-right: 0; }
+.view-toggle .seg:hover { background: var(--brand-soft); color: var(--brand); }
+.view-toggle .seg.active { background: var(--brand); color: #fff; }
+
+/* ---------- Matriz dia x trabajador (vista obra) ---------- */
+.matrix-legend { padding: 8px 16px 0; color: var(--steel); font-size: 0.82rem; }
+.matrix-scroll { overflow-x: auto; padding: 10px 16px 16px; }
+.matrix { border-collapse: separate; border-spacing: 0; font-size: 0.82rem; }
+.matrix th, .matrix td { border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); }
+.matrix thead th {
+  position: sticky; top: 0; z-index: 2; background: var(--paper-2, #f7f7f8);
+  text-align: center; padding: 6px 0; min-width: 34px; color: var(--steel); font-weight: 700;
+}
+.matrix .mx-name {
+  position: sticky; left: 0; z-index: 3; background: var(--paper);
+  text-align: left; padding: 6px 12px 6px 6px; min-width: 210px; max-width: 260px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.matrix thead .mx-name { z-index: 4; }
+.matrix .mx-badge { margin-left: 6px; }
+.matrix .mx-cell { text-align: center; padding: 6px 4px; min-width: 34px; white-space: nowrap; }
+.matrix .mx-we { background: #f3f4f5; color: var(--steel); }
+.matrix .mx-hol { background: #fbeef0; }
+.matrix .mx-inc { background: var(--warn-soft, #fff4e0); font-weight: 700; }
+.matrix .mx-extra { color: var(--brand); }
+.matrix .mx-tot { text-align: center; font-weight: 700; min-width: 56px; padding: 6px 8px; background: var(--paper); }
+.matrix tfoot td { font-weight: 700; background: #f7f7f8; }
+.matrix tfoot .mx-foot { text-align: center; }
+
+/* ---------- Controles de periodo (modo + selector de mes) ---------- */
+.cal-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.view-toggle.small .seg { padding: 6px 10px; font-size: 0.78rem; }
+
+/* ============================================================== */
+/* Cabecera estilo Ruesma (burdeos + blanco) + fila de filtros.   */
+/* Se aplica a tablas marcadas con .filterable y a la matriz.     */
+/* ============================================================== */
+.filterable thead tr:first-child th {
+  background: var(--brand); color: #fff; font-weight: 700;
+  border-bottom-color: var(--brand-strong);
+  border-right: 1px solid rgba(255,255,255,0.18);
+}
+.filterable thead tr:first-child th:last-child { border-right: none; }
+.filterable thead tr:first-child th a { color: #fff; }
+.filterable thead tr:first-child th a:hover { color: rgba(255,255,255,0.78); }
+
+/* Fila de filtros (segunda fila del thead) en blanco. */
+.filter-row th {
+  background: var(--paper); padding: 6px 8px 9px; vertical-align: top;
+  border-bottom: 1px solid var(--line-strong);
+  text-transform: none; letter-spacing: normal; font-weight: 400;
+}
+.filter-row .col-filter {
+  width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit;
+  font-size: 0.8rem; border: 1px solid var(--line-strong); border-radius: 6px;
+  background: var(--paper); color: var(--ink);
+  text-transform: none; letter-spacing: normal; font-weight: 400;
+}
+.filter-row .col-filter:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.filter-row .col-filter::placeholder { color: var(--steel-300); }
+.filter-clear {
+  width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit;
+  font-size: 0.78rem; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: 6px;
+  background: var(--paper); color: var(--steel);
+}
+.filter-clear:hover { background: var(--brand-soft); color: var(--brand); border-color: var(--brand); }
+
+/* Matriz (obra): misma cabecera burdeos; los findes/festivos solo tinen el
+   cuerpo, no la cabecera. */
+.matrix.filterable thead th { background: var(--brand); color: #fff; }
+.matrix.filterable thead .mx-name { background: var(--brand); }
+.matrix tbody .mx-we { background: #f3f4f5; }
+.matrix tbody .mx-hol { background: #fbeef0; }
+.matrix thead .mx-we, .matrix thead .mx-hol { background: var(--brand); color: #fff; }
+
+/* La fila de filtros de la matriz va en blanco (no hereda el burdeos). */
+.matrix.filterable thead tr.filter-row th { background: var(--paper); }
+.matrix.filterable thead tr.filter-row .mx-name { background: var(--paper); z-index: 4; }
+.matrix.filterable thead tr.filter-row th { border-right: 1px solid var(--line); }
+
+/* Tarjeta del calendario: desglose por OBRA (codigo encima de las horas;
+   si hay 2+ obras el mismo dia, una columna por obra). */
+.cal-obras { display: flex; gap: 6px; margin-top: 5px; align-items: flex-start; }
+.cal-obra { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 0; }
+.cal-obras-multi .cal-obra + .cal-obra { border-left: 1px solid var(--line); padding-left: 6px; }
+.cal-obra-cod {
+  font-size: 0.66rem; font-weight: 800; color: var(--steel); letter-spacing: 0.02em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.cal-obra .cal-hours { margin-top: 1px; }
+
+/* Cabecera ordenable: cursor, hover y flechita ▲/▼ */
+.filterable thead tr:first-child th.sortable-th { cursor: pointer; user-select: none; white-space: nowrap; }
+.filterable thead tr:first-child th.sortable-th:hover { background: var(--brand-strong); }
+.filterable thead tr:first-child th.sorted { background: var(--brand-strong); }
+.sort-arrow { font-size: 0.72em; opacity: 0.95; }
+.matrix.filterable thead tr:first-child th.sortable-th:hover,
+.matrix.filterable thead tr:first-child th.sorted { background: var(--brand-strong); }
+
+/* ================= Conciliacion de trabajadores ================= */
+.recon-list { display: flex; flex-direction: column; gap: 14px; }
+.recon-card {
+  background: var(--paper); border: 1px solid var(--line-strong); border-radius: 12px;
+  padding: 14px 16px; border-left: 4px solid var(--steel-300);
+}
+.recon-card.recon-auto { border-left-color: var(--ok-border, #2e7d52); }
+.recon-card.recon-revisar { border-left-color: #c9962b; }
+.recon-card.recon-sin { border-left-color: var(--danger-border, #b3261e); }
+.recon-card.recon-categoria { border-left-color: var(--steel); }
+.recon-card.recon-done { border-left-color: var(--ok-border, #2e7d52); opacity: 0.85; }
+.recon-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.recon-name { font-weight: 800; font-size: 1.02rem; display: block; }
+.recon-meta { color: var(--steel); font-size: 0.82rem; }
+.recon-body { margin-top: 10px; }
+.recon-cands { width: 100%; border-collapse: collapse; }
+.recon-cands td { padding: 6px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
+.recon-cands tr:first-child td { border-top: none; }
+.rc-score { width: 64px; }
+.rc-act { width: 90px; text-align: right; }
+.rc-emp .cell-sub { margin-left: 8px; display: inline; }
+.score-pill { display: inline-block; padding: 2px 8px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; }
+.score-hi { background: #e3f3ea; color: #2e7d52; }
+.score-mid { background: #fbf1dd; color: #9a6b14; }
+.score-lo { background: #f1f2f3; color: var(--steel); }
+.manual-search { margin-top: 10px; }
+.manual-q { width: 100%; max-width: 460px; }
+.manual-results { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.manual-item {
+  display: flex; align-items: center; gap: 10px; padding: 5px 8px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--paper-soft);
+}
+.manual-item .mi-score { font-weight: 700; color: var(--steel); min-width: 40px; }
+.manual-item .mi-emp { flex: 1; }
+.manual-empty { color: var(--steel); font-size: 0.85rem; padding: 4px 2px; }
+.recon-status { margin-top: 8px; font-size: 0.85rem; font-weight: 600; color: var(--steel); }
+.recon-status.error { color: var(--danger, #b3261e); }

@@ -124,7 +124,7 @@
           {% endif %}
         </div>
       </div>
-      <table class="table lines-table">
+      <table class="table lines-table filterable">
         <thead>
           <tr>
             <th>Tipo</th>
@@ -190,6 +190,3 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
-<script src="{{ url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
-{% endblock %}

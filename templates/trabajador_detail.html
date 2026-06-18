@@ -41,18 +41,25 @@
   <div class="panel-header cal-head">
     <div>
       <h2>Calendario · {{ calendar.label }}</h2>
-      <p class="muted small">{{ calendar.range_label }} · del 16 al 15</p>
+      <p class="muted small">{{ calendar.range_label }}{% if period_mode == 'natural' %} · mes natural{% else %} · del 16 al 15{% endif %}</p>
     </div>
-    {% if period_options %}
-    <form method="get" action="/trabajadores/{{ detail.worker_key }}" class="cal-period">
-      <label class="small muted" for="period">Mes</label>
-      <select class="combo" id="period" name="period" onchange="this.form.submit()">
-        {% for opt in period_options %}
-        <option value="{{ opt.key }}" {% if opt.key == selected_period %}selected{% endif %}>{{ opt.label }}</option>
-        {% endfor %}
-      </select>
-    </form>
-    {% endif %}
+    <div class="cal-controls">
+      <div class="view-toggle small">
+        <a class="seg {% if period_mode != 'natural' %}active{% endif %}" href="/trabajadores/{{ detail.worker_key }}?modo=nomina">Mes nomina</a>
+        <a class="seg {% if period_mode == 'natural' %}active{% endif %}" href="/trabajadores/{{ detail.worker_key }}?modo=natural">Mes natural</a>
+      </div>
+      {% if period_options %}
+      <form method="get" action="/trabajadores/{{ detail.worker_key }}" class="cal-period">
+        <input type="hidden" name="modo" value="{{ period_mode }}">
+        <label class="small muted" for="period">Mes</label>
+        <select class="combo" id="period" name="period" onchange="this.form.submit()">
+          {% for opt in period_options %}
+          <option value="{{ opt.key }}" {% if opt.key == selected_period %}selected{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+    </div>
   </div>
 
   <div class="cal-legend">
@@ -76,11 +83,20 @@
         <span class="cal-num">{{ day.day }}</span>
         {% if day.in_period %}
           {% if day.is_holiday %}<span class="cal-fest" title="{{ day.holiday_name }}">●</span>{% endif %}
-          <div class="cal-hours">
-            {% if day.normal_h %}<span class="cal-h cal-h-normal">{{ day.normal_h|horas }}</span>{% endif %}
-            {% if day.extra_h %}<span class="cal-h cal-h-extra">{{ day.extra_h|horas }}</span>{% endif %}
-            {% if day.incidencias %}<span class="cal-h cal-h-inc">{{ day.incidencias }} inc.</span>{% endif %}
+          {% if day.obras %}
+          <div class="cal-obras{% if day.obras|length > 1 %} cal-obras-multi{% endif %}">
+            {% for o in day.obras %}
+            <div class="cal-obra">
+              <span class="cal-obra-cod" title="{{ o.obra_nombre or '' }}">{{ o.obra_codigo or o.obra_nombre or "—" }}</span>
+              <div class="cal-hours">
+                {% if o.normal_h %}<span class="cal-h cal-h-normal">{{ o.normal_h|horas }}</span>{% endif %}
+                {% if o.extra_h %}<span class="cal-h cal-h-extra">{{ o.extra_h|horas }}</span>{% endif %}
+                {% if o.incidencias %}<span class="cal-h cal-h-inc">{{ o.incidencias }} inc.</span>{% endif %}
+              </div>
+            </div>
+            {% endfor %}
           </div>
+          {% endif %}
         {% endif %}
       </div>
       {% endfor %}
@@ -101,7 +117,7 @@
 
 <div class="panel">
   <div class="panel-header"><h2>Registros horarios</h2></div>
-  <table class="table lines-table" id="lines-table">
+  <table class="table lines-table filterable" id="lines-table">
     <thead>
       <tr>
         <th>Fecha</th>
@@ -111,6 +127,15 @@
         <th class="num">Horas</th>
         <th>Codigo de hora (Sigrid)</th>
         <th>Firma parte</th>
+      </tr>
+      <tr class="filter-row">
+        <th><input class="col-filter" type="text" placeholder="AAAA-MM-DD"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="Ordin./Extra…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="Codigo…"></th>
+        <th><button type="button" class="filter-clear">Limpiar</button></th>
       </tr>
     </thead>
     <tbody>
@@ -176,6 +201,3 @@
 </div>
 {% endblock %}
 
-{% block scripts %}
-<script src="{{ url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
-{% endblock %}

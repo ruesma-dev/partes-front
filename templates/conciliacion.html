@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Conciliacion · {{ title }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Mano de obra</span>
+    <h1>Conciliar trabajadores</h1>
+    <p class="muted">Casa los trabajadores que la IA leyo pero no se pudieron casar contra Sigrid. Al confirmar, se aplica a todos sus registros y se memoriza para futuras lecturas.</p>
+  </div>
+  <a class="btn secondary" href="/trabajadores">← Trabajadores</a>
+</div>
+
+{% if not sigrid_enabled %}
+<div class="alert info">Sigrid no esta configurado en el portal (variables <code>SIGRID_API_*</code>): no se pueden proponer candidatos.</div>
+{% endif %}
+
+<div class="stat-grid">
+  <div class="stat-card"><span class="stat-label">Sin casar</span><span class="stat-value">{{ n_total }}</span></div>
+  <div class="stat-card"><span class="stat-label">Candidato claro</span><span class="stat-value">{{ n_auto }}</span></div>
+  <div class="stat-card"><span class="stat-label">A revisar</span><span class="stat-value">{{ n_revisar }}</span></div>
+  <div class="stat-card"><span class="stat-label">Sin candidato</span><span class="stat-value">{{ n_sin }}</span></div>
+</div>
+
+{% if filas %}
+<div class="recon-list">
+  {% for fila in filas %}
+  <div class="recon-card recon-{{ fila.bucket }}" data-nombre="{{ fila.nombre_leido }}">
+    <div class="recon-head">
+      <div class="recon-id">
+        <span class="recon-name">{{ fila.nombre_leido }}</span>
+        <span class="recon-meta">{{ fila.num_registros }} registro{{ 's' if fila.num_registros != 1 else '' }}
+          {% if fila.obras %}· obras: {{ fila.obras|join(', ') }}{% endif %}
+          {% if fila.categorias %}· {{ fila.categorias|join(', ') }}{% endif %}
+        </span>
+      </div>
+      <div>
+        {% if fila.bucket == 'auto' %}<span class="badge ok">Candidato claro</span>
+        {% elif fila.bucket == 'revisar' %}<span class="badge warn">A revisar</span>
+        {% elif fila.bucket == 'categoria' %}<span class="badge">Parece categoria</span>
+        {% else %}<span class="badge danger">Sin candidato</span>{% endif %}
+      </div>
+    </div>
+
+    <div class="recon-body">
+      {% if fila.candidates %}
+      <table class="recon-cands">
+        <tbody>
+          {% for c in fila.candidates %}
+          <tr>
+            <td class="rc-score"><span class="score-pill score-{{ 'hi' if c.score >= 85 else ('mid' if c.score >= 65 else 'lo') }}">{{ c.score }}%</span></td>
+            <td class="rc-emp">
+              <strong>{% if c.codigo %}{{ c.codigo }} · {% endif %}{{ c.nombre or '(sin nombre)' }}</strong>
+              {% if c.dni %}<span class="cell-sub">DNI {{ c.dni }}</span>{% endif %}
+            </td>
+            <td class="rc-act">
+              <button type="button" class="btn primary small btn-casar"
+                      data-nombre="{{ fila.nombre_leido }}" data-ide="{{ c.ide }}"
+                      data-emp="{% if c.codigo %}{{ c.codigo }} · {% endif %}{{ c.nombre or '' }}">Casar</button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% elif fila.bucket == 'categoria' %}
+      <p class="muted small">Este "nombre" parece una categoria/rol (nombre ilegible o ausente en el parte). Revisa el parte; si el trabajador no esta en Sigrid, habra que darlo de alta.</p>
+      {% else %}
+      <p class="muted small">Ningun candidato suficientemente parecido. Probablemente no esta en el maestro de Sigrid, o el nombre se leyo muy mal. Busca manualmente:</p>
+      {% endif %}
+
+      <div class="manual-search">
+        <input type="text" class="manual-q cell-edit" data-nombre="{{ fila.nombre_leido }}"
+               placeholder="Buscar otro empleado por nombre o codigo…" autocomplete="off">
+        <div class="manual-results"></div>
+      </div>
+      <div class="recon-status"></div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty">
+  <p>No hay trabajadores sin casar. 🎉</p>
+</div>
+{% endif %}
+{% endblock %}

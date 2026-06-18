@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% block title %}{{ detail.obra_codigo or detail.obra_nombre or "Obra" }} · {{ title }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Obra</span>
+    <h1>{% if detail.obra_codigo %}{{ detail.obra_codigo }} · {% endif %}{{ detail.obra_nombre or "(obra sin identificar)" }}</h1>
+    <p class="muted">Horas por dia y trabajador del periodo seleccionado.</p>
+  </div>
+  <a class="btn secondary" href="/obras">← Obras</a>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-card">
+    <span class="stat-label">Horas ordinarias</span>
+    <span class="stat-value">{{ detail.total_normal|horas }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Horas extra</span>
+    <span class="stat-value">{{ detail.total_extra|horas }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Incidencias</span>
+    <span class="stat-value">{{ detail.total_incidencias }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Trabajadores</span>
+    <span class="stat-value">{{ detail.rows|length }}</span>
+  </div>
+</div>
+
+<div class="panel cal-panel">
+  <div class="panel-header cal-head">
+    <div>
+      <h2>Horas por dia · {{ detail.period_label or "" }}</h2>
+      {% if detail.range_label %}<p class="muted small">{{ detail.range_label }}{% if period_mode == 'natural' %} · mes natural{% else %} · del 16 al 15{% endif %}</p>{% endif %}
+    </div>
+    <div class="cal-controls">
+      <div class="view-toggle small">
+        <a class="seg {% if period_mode != 'natural' %}active{% endif %}" href="/obras/{{ detail.obra_key }}?modo=nomina">Mes nomina</a>
+        <a class="seg {% if period_mode == 'natural' %}active{% endif %}" href="/obras/{{ detail.obra_key }}?modo=natural">Mes natural</a>
+      </div>
+      {% if detail.period_options %}
+      <form method="get" action="/obras/{{ detail.obra_key }}" class="cal-period">
+        <input type="hidden" name="modo" value="{{ period_mode }}">
+        <label class="small muted" for="period">Mes</label>
+        <select class="combo" id="period" name="period" onchange="this.form.submit()">
+          {% for opt in detail.period_options %}
+          <option value="{{ opt.key }}" {% if opt.key == selected_period %}selected{% endif %}>{{ opt.label }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if detail.rows %}
+  <div class="matrix-legend">
+    <span>Celda: <strong>ordinarias</strong>+<strong>extra</strong> (p. ej. <code>8+2</code>). Solo extra: <code>+2</code>. Incidencia: su codigo (p. ej. <code>V</code>).</span>
+  </div>
+  <div class="matrix-scroll">
+    <table class="matrix filterable">
+      <thead>
+        <tr>
+          <th class="mx-name">Trabajador</th>
+          {% for d in detail.days %}
+          <th class="mx-day{% if d.is_weekend %} mx-we{% endif %}{% if d.is_holiday %} mx-hol{% endif %}"
+              title="{{ d.date_iso }}{% if d.holiday_name %} · {{ d.holiday_name }}{% endif %}">{{ d.day }}</th>
+          {% endfor %}
+          <th class="mx-tot">Tot</th>
+        </tr>
+        <tr class="filter-row">
+          <th class="mx-name"><input class="col-filter" type="text" placeholder="Filtrar trabajador…"></th>
+          {% for d in detail.days %}<th></th>{% endfor %}
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in detail.rows %}
+        <tr>
+          <td class="mx-name">
+            <a class="link-strong" href="/trabajadores/{{ row.worker_key }}">{{ row.nombre }}</a>
+            {% if not row.matched %}<span class="badge danger mx-badge">sin casar</span>{% endif %}
+          </td>
+          {% for c in row.cells %}
+          <td class="mx-cell{% if c.is_weekend %} mx-we{% endif %}{% if c.is_holiday %} mx-hol{% endif %}{% if c.has_inc %} mx-inc{% endif %}{% if c.extra and not c.normal %} mx-extra{% endif %}">{{ c.label }}</td>
+          {% endfor %}
+          <td class="mx-tot">{% if row.total_extra %}{{ row.total_normal|horas }}+{{ row.total_extra|horas }}{% elif row.total_normal %}{{ row.total_normal|horas }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td class="mx-name">Total dia</td>
+          {% for c in detail.col_totals %}
+          <td class="mx-cell mx-foot">{% if c.extra %}{{ c.normal|horas }}+{{ c.extra|horas }}{% elif c.normal %}{{ c.normal|horas }}{% endif %}</td>
+          {% endfor %}
+          <td class="mx-tot">{{ detail.total_normal|horas }}{% if detail.total_extra %}+{{ detail.total_extra|horas }}{% endif %}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">No hay horas en este periodo para esta obra.</div>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <div class="panel-header"><h2>Lineas del periodo</h2></div>
+  {% if detail.registros %}
+  <table class="table lines-table filterable" id="lines-table">
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>Trabajador</th>
+        <th>Categoria</th>
+        <th>Tipo</th>
+        <th class="num">Horas</th>
+        <th>Codigo de hora (Sigrid)</th>
+        <th>Firma parte</th>
+      </tr>
+      <tr class="filter-row">
+        <th><input class="col-filter" type="text" placeholder="AAAA-MM-DD"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
+        <th><input class="col-filter" type="text" placeholder="Ordin./Extra…"></th>
+        <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th><input class="col-filter" type="text" placeholder="Codigo…"></th>
+        <th><button type="button" class="filter-clear">Limpiar</button></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in detail.registros %}
+      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}">
+        <td class="cell-fecha">
+          <input type="date" class="fecha-edit cell-edit"
+                 data-document-id="{{ r.document_id }}"
+                 value="{{ r.fecha or '' }}">
+          <a class="row-detail" href="/partes/{{ r.document_id }}" title="Abrir detalle del parte">↗</a>
+        </td>
+        <td>{{ r.trabajador_nombre or "—" }}</td>
+        <td>{{ r.categoria or "—" }}</td>
+        <td>
+          {% if r.es_incidencia %}
+            <span class="badge warn" title="{{ r.incidencia_texto or '' }}">{{ r.incidencia_codigo }} · {{ r.incidencia_codigo|incidencia }}</span>
+          {% elif r.hora_ext == 1 or r.tipo_hora == 'extra' %}
+            <span class="badge extra">Extra</span>
+          {% else %}
+            <span class="badge normal">Ordinaria</span>
+          {% endif %}
+        </td>
+        <td class="num cell-horas">
+          <input type="number" step="0.5" min="0" class="horas-edit cell-edit cell-edit-num"
+                 data-registro-id="{{ r.id }}"
+                 value="{{ r.horas if r.horas is not none else '' }}">
+        </td>
+        <td>
+          <select class="combo combo-hora" data-registro-id="{{ r.id }}"
+                  data-current="{{ r.hora_ide if r.hora_ide is not none else '' }}">
+            <option value="">— sin asignar —</option>
+          </select>
+          <div class="cell-sub combo-hora-current">
+            {% if r.hora_codigo %}{{ r.hora_codigo }} · {{ r.hora_descripcion or '' }}{% else %}—{% endif %}
+            {% if r.hora_match_method in ['categoria_normal', 'categoria_extra', 'categoria_extra_a_normal', 'extra_por_categoria', 'incidencia', 'incidencia_desc', 'ext_default', 'ext_first'] %}<span class="tag-auto" title="Asignado por matcheo determinista ({{ r.hora_match_method }})">auto</span>{% elif r.hora_match_method == 'codigo_propuesto' %}<span class="tag-ia" title="Propuesto por la IA - conviene revisar">IA</span>{% elif r.hora_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
+          </div>
+        </td>
+        <td>
+          {% if r.parte_firmado %}
+            <span class="badge ok" title="Firmado{% if r.parte_firmante_rol %} · {{ r.parte_firmante_rol }}{% endif %}">Firmado</span>
+          {% else %}
+            <span class="badge danger">Sin firma</span>
+          {% endif %}
+          {% if r.parte_aprobado %}<span class="badge ok">Aprobado</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty-state">No hay lineas en este periodo.</div>
+  {% endif %}
+</div>
+{% endblock %}
