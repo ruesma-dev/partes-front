@@ -127,6 +127,7 @@
         <th class="num">Horas</th>
         <th>Codigo de hora (Sigrid)</th>
         <th>Firma parte</th>
+        {% if preview_enabled %}<th>Parte</th>{% endif %}
       </tr>
       <tr class="filter-row">
         <th><input class="col-filter" type="text" placeholder="AAAA-MM-DD"></th>
@@ -136,6 +137,7 @@
         <th><input class="col-filter" type="text" placeholder="…"></th>
         <th><input class="col-filter" type="text" placeholder="Codigo…"></th>
         <th><button type="button" class="filter-clear">Limpiar</button></th>
+        {% if preview_enabled %}<th></th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -194,6 +196,14 @@
           {% endif %}
           {% if r.parte_aprobado %}<span class="badge ok">Aprobado</span>{% endif %}
         </td>
+        {% if preview_enabled %}
+        <td class="cell-parte">
+          {% if r.tiene_pdf %}
+          <button type="button" class="btn secondary small" data-parte-pdf="{{ r.document_id }}"
+                  data-parte-title="Parte · {{ r.obra_codigo or '' }} · {{ r.fecha or '' }} · {{ detail.nombre }}">Ver PDF</button>
+          {% else %}<span class="muted small">—</span>{% endif %}
+        </td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>

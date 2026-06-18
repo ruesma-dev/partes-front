@@ -83,7 +83,8 @@
             {% if not row.matched %}<span class="badge danger mx-badge">sin casar</span>{% endif %}
           </td>
           {% for c in row.cells %}
-          <td class="mx-cell{% if c.is_weekend %} mx-we{% endif %}{% if c.is_holiday %} mx-hol{% endif %}{% if c.has_inc %} mx-inc{% endif %}{% if c.extra and not c.normal %} mx-extra{% endif %}">{{ c.label }}</td>
+          <td class="mx-cell{% if c.is_weekend %} mx-we{% endif %}{% if c.is_holiday %} mx-hol{% endif %}{% if c.has_inc %} mx-inc{% endif %}{% if c.extra and not c.normal %} mx-extra{% endif %}{% if preview_enabled and c.tiene_pdf %} mx-cell-pdf{% endif %}"
+              {% if preview_enabled and c.tiene_pdf %}data-parte-pdf="{{ c.document_id }}" data-parte-title="Parte · {{ detail.obra_codigo or detail.obra_nombre or '' }} · {{ c.date_iso }} · {{ row.nombre }}" title="Ver parte del {{ c.date_iso }}"{% endif %}>{{ c.label }}</td>
           {% endfor %}
           <td class="mx-tot">{% if row.total_extra %}{{ row.total_normal|horas }}+{{ row.total_extra|horas }}{% elif row.total_normal %}{{ row.total_normal|horas }}{% else %}—{% endif %}</td>
         </tr>
@@ -118,6 +119,7 @@
         <th class="num">Horas</th>
         <th>Codigo de hora (Sigrid)</th>
         <th>Firma parte</th>
+        {% if preview_enabled %}<th>Parte</th>{% endif %}
       </tr>
       <tr class="filter-row">
         <th><input class="col-filter" type="text" placeholder="AAAA-MM-DD"></th>
@@ -127,6 +129,7 @@
         <th><input class="col-filter" type="text" placeholder="…"></th>
         <th><input class="col-filter" type="text" placeholder="Codigo…"></th>
         <th><button type="button" class="filter-clear">Limpiar</button></th>
+        {% if preview_enabled %}<th></th>{% endif %}
       </tr>
     </thead>
     <tbody>
@@ -180,6 +183,14 @@
           {% endif %}
           {% if r.parte_aprobado %}<span class="badge ok">Aprobado</span>{% endif %}
         </td>
+        {% if preview_enabled %}
+        <td class="cell-parte">
+          {% if r.tiene_pdf %}
+          <button type="button" class="btn secondary small" data-parte-pdf="{{ r.document_id }}"
+                  data-parte-title="Parte · {{ detail.obra_codigo or detail.obra_nombre or '' }} · {{ r.fecha or '' }} · {{ r.trabajador_nombre or '' }}">Ver PDF</button>
+          {% else %}<span class="muted small">—</span>{% endif %}
+        </td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>

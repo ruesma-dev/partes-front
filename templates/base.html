@@ -35,6 +35,23 @@
     </div>
   </main>
 
+  <div id="pdf-modal" class="pdf-modal" hidden>
+    <div class="pdf-modal-backdrop" data-pdf-close></div>
+    <div class="pdf-modal-card">
+      <div class="pdf-modal-head">
+        <span class="pdf-modal-title" id="pdf-modal-title">Parte</span>
+        <div class="pdf-modal-actions">
+          <a class="btn secondary small" id="pdf-modal-open" href="#" target="_blank" rel="noopener">Abrir en pestaña</a>
+          <button type="button" class="btn small" data-pdf-close>Cerrar</button>
+        </div>
+      </div>
+      <div class="pdf-modal-body">
+        <div class="pdf-modal-loading" id="pdf-modal-loading">Cargando parte…</div>
+        <iframe id="pdf-modal-frame" title="Parte (PDF)"></iframe>
+      </div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
   {% block scripts %}{% endblock %}
 </body>

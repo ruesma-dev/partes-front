@@ -532,3 +532,31 @@ h1 {
 .name-edit-toggle:hover { color: var(--brand); border-color: var(--brand); background: var(--brand-soft); }
 .cell-trab-name .combo-emp { margin-top: 6px; }
 .cell-trabajador { min-width: 240px; }
+
+/* ===================== Modal de PDF del parte ===================== */
+body.modal-open { overflow: hidden; }
+.pdf-modal { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; }
+.pdf-modal[hidden] { display: none; }
+.pdf-modal-backdrop { position: absolute; inset: 0; background: rgba(20,22,26,0.55); backdrop-filter: blur(1px); }
+.pdf-modal-card {
+  position: relative; width: min(1100px, 94vw); height: min(90vh, 960px);
+  background: var(--paper); border-radius: 14px; box-shadow: 0 24px 70px rgba(0,0,0,0.35);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.pdf-modal-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line-strong);
+  background: var(--brand); color: #fff;
+}
+.pdf-modal-title { font-weight: 700; font-size: 0.95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-modal-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.pdf-modal-actions .btn { background: rgba(255,255,255,0.16); color: #fff; border-color: rgba(255,255,255,0.4); }
+.pdf-modal-actions .btn:hover { background: rgba(255,255,255,0.28); }
+.pdf-modal-body { position: relative; flex: 1; background: #525659; }
+.pdf-modal-body iframe { width: 100%; height: 100%; border: 0; display: block; }
+.pdf-modal-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #e7e7e7; font-size: 0.9rem; }
+
+/* Celdas de la matriz que abren el parte */
+.mx-cell-pdf { cursor: pointer; }
+.mx-cell-pdf:hover { outline: 2px solid var(--brand); outline-offset: -2px; background: var(--brand-soft); }
+.cell-parte { white-space: nowrap; }

@@ -204,6 +204,16 @@ class RegistroEditPayload(BaseModel):
         return s or None
 
 
+def _as_int(value: Any) -> int | None:
+    """Coacciona a int tolerando str/float; None si no es convertible."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_app(settings: Settings) -> FastAPI:
     session_factory = SessionFactory(
         database_url=settings.database_url,
@@ -395,6 +405,7 @@ def build_app(settings: Settings) -> FastAPI:
             "selected_period": calendar.period_key if calendar else None,
             "period_mode": mode,
             "sigrid_enabled": settings.sigrid_lookup_enabled,
+            "preview_enabled": settings.preview_enabled,
             "back": f"/trabajadores/{worker_key}",
             "message": message,
         }
@@ -449,6 +460,7 @@ def build_app(settings: Settings) -> FastAPI:
             "selected_period": detail.period_key,
             "period_mode": mode,
             "sigrid_enabled": settings.sigrid_lookup_enabled,
+            "preview_enabled": settings.preview_enabled,
             "back": f"/obras/{obra_key}",
             "message": message,
         }
@@ -457,10 +469,6 @@ def build_app(settings: Settings) -> FastAPI:
         )
 
     # -------------------- CONCILIACION de trabajadores ---------------- #
-    class ConfirmarPayload(BaseModel):
-        nombre_leido: str
-        ide: int
-
     @app.get("/conciliacion", response_class=HTMLResponse)
     def conciliacion(request: Request) -> HTMLResponse:
         pendientes = repository.list_unmatched_workers()
@@ -508,24 +516,56 @@ def build_app(settings: Settings) -> FastAPI:
         )
 
     @app.post("/api/conciliacion/confirmar")
-    def conciliacion_confirmar(payload: ConfirmarPayload) -> JSONResponse:
-        emp = empleado_catalog.get_by_ide(payload.ide)
+    async def conciliacion_confirmar(request: Request) -> JSONResponse:
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = None
+        if not isinstance(data, dict):
+            return JSONResponse(
+                {"ok": False, "error": "Body no es JSON válido."},
+                status_code=400,
+            )
+        nombre_leido = data.get("nombre_leido")
+        ide = _as_int(data.get("ide"))
+        if not nombre_leido or ide is None:
+            return JSONResponse(
+                {"ok": False, "error": "Faltan datos: "
+                 f"nombre_leido={nombre_leido!r}, ide={data.get('ide')!r}."},
+                status_code=400,
+            )
+        emp = empleado_catalog.get_by_ide(ide)
         if emp is None:
             return JSONResponse(
-                {"ok": False, "error": "Empleado no encontrado en el maestro"},
+                {"ok": False, "error": "Empleado no encontrado en el maestro "
+                 f"(ide={ide}). ¿Sigrid configurado en sv4?"},
                 status_code=404,
             )
-        updated = repository.backfill_empleado(
-            nombre_leido=payload.nombre_leido, ide=emp.ide,
-            codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
-        )
-        repository.upsert_empleado_alias(
-            nombre_leido=payload.nombre_leido, ide=emp.ide,
-            codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
-            created_by="conciliacion",
-        )
+        try:
+            updated = repository.backfill_empleado(
+                nombre_leido=nombre_leido, ide=emp.ide,
+                codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[conciliacion] backfill fallo")
+            return JSONResponse(
+                {"ok": False, "error": f"Error guardando casado: "
+                 f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        # El alias es una optimizacion (auto-casado futuro): best-effort.
+        alias_ok = True
+        try:
+            repository.upsert_empleado_alias(
+                nombre_leido=nombre_leido, ide=emp.ide,
+                codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
+                created_by="conciliacion",
+            )
+        except Exception as exc:  # noqa: BLE001
+            alias_ok = False
+            logger.warning("[conciliacion] alias no guardado: %r", exc)
         return JSONResponse({
-            "ok": True, "updated": updated,
+            "ok": True, "updated": updated, "alias_ok": alias_ok,
             "empleado": {"ide": emp.ide, "codigo": emp.codigo,
                          "nombre": emp.nombre},
         })
@@ -556,59 +596,87 @@ def build_app(settings: Settings) -> FastAPI:
         ]
         return JSONResponse({"ok": True, "items": items})
 
-    class ReasignarPayload(BaseModel):
-        ide: int
-        registro_id: int | None = None
-        worker_key: str | None = None
-        nombre_leido: str | None = None
-
     @app.post("/api/empleado/reasignar")
-    def empleado_reasignar(payload: ReasignarPayload) -> JSONResponse:
-        emp = empleado_catalog.get_by_ide(payload.ide)
-        if emp is None:
+    async def empleado_reasignar(request: Request) -> JSONResponse:
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = None
+        if not isinstance(data, dict):
             return JSONResponse(
-                {"ok": False, "error": "Empleado no encontrado en el maestro"},
-                status_code=404,
-            )
-        updated = 0
-        leidos: list[str] = []
-        if payload.registro_id is not None:
-            leido = repository.get_registro_leido(payload.registro_id)
-            if not leido:
-                return JSONResponse(
-                    {"ok": False, "error": "Registro sin nombre leido"},
-                    status_code=400,
-                )
-            updated = repository.reassign_empleado_by_leido(
-                nombre_leido=leido, ide=emp.ide, codigo=emp.codigo,
-                nombre=emp.nombre, dni=emp.dni,
-            )
-            leidos = [leido]
-        elif payload.worker_key:
-            updated, leidos = repository.reassign_empleado_by_worker_key(
-                worker_key=payload.worker_key, ide=emp.ide, codigo=emp.codigo,
-                nombre=emp.nombre, dni=emp.dni,
-            )
-        elif payload.nombre_leido:
-            updated = repository.reassign_empleado_by_leido(
-                nombre_leido=payload.nombre_leido, ide=emp.ide,
-                codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
-            )
-            leidos = [payload.nombre_leido]
-        else:
-            return JSONResponse(
-                {"ok": False, "error": "Falta registro_id / worker_key / nombre_leido"},
+                {"ok": False, "error": "Body no es JSON válido."},
                 status_code=400,
             )
-
-        # Memoriza el/los alias (nombre leido -> empleado) para futuras ingestas.
-        for leido in leidos:
-            repository.upsert_empleado_alias(
-                nombre_leido=leido, ide=emp.ide, codigo=emp.codigo,
-                nombre=emp.nombre, dni=emp.dni, created_by="reasignacion",
+        ide = _as_int(data.get("ide"))
+        if ide is None:
+            return JSONResponse(
+                {"ok": False, "error": f"Falta o es inválido 'ide' "
+                 f"({data.get('ide')!r})."},
+                status_code=400,
             )
+        emp = empleado_catalog.get_by_ide(ide)
+        if emp is None:
+            return JSONResponse(
+                {"ok": False, "error": "Empleado no encontrado en el maestro "
+                 f"(ide={ide}). ¿Sigrid configurado en sv4?"},
+                status_code=404,
+            )
+        registro_id = _as_int(data.get("registro_id"))
+        worker_key = data.get("worker_key")
+        nombre_leido_in = data.get("nombre_leido")
+        updated = 0
+        leidos: list[str] = []
+        try:
+            if registro_id is not None:
+                leido = repository.get_registro_leido(registro_id)
+                if not leido:
+                    return JSONResponse(
+                        {"ok": False, "error": "Registro sin nombre leido"},
+                        status_code=400,
+                    )
+                updated = repository.reassign_empleado_by_leido(
+                    nombre_leido=leido, ide=emp.ide, codigo=emp.codigo,
+                    nombre=emp.nombre, dni=emp.dni,
+                )
+                leidos = [leido]
+            elif worker_key:
+                updated, leidos = repository.reassign_empleado_by_worker_key(
+                    worker_key=worker_key, ide=emp.ide,
+                    codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
+                )
+            elif nombre_leido_in:
+                updated = repository.reassign_empleado_by_leido(
+                    nombre_leido=nombre_leido_in, ide=emp.ide,
+                    codigo=emp.codigo, nombre=emp.nombre, dni=emp.dni,
+                )
+                leidos = [nombre_leido_in]
+            else:
+                return JSONResponse(
+                    {"ok": False,
+                     "error": "Falta registro_id / worker_key / nombre_leido"},
+                    status_code=400,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[reasignar] fallo guardando reasignacion")
+            return JSONResponse(
+                {"ok": False, "error": f"Error guardando reasignacion: "
+                 f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+
+        # Alias (auto-casado futuro): best-effort, no debe tumbar la reasignacion.
+        alias_ok = True
+        for leido in leidos:
+            try:
+                repository.upsert_empleado_alias(
+                    nombre_leido=leido, ide=emp.ide, codigo=emp.codigo,
+                    nombre=emp.nombre, dni=emp.dni, created_by="reasignacion",
+                )
+            except Exception as exc:  # noqa: BLE001
+                alias_ok = False
+                logger.warning("[reasignar] alias no guardado: %r", exc)
         return JSONResponse({
-            "ok": True, "updated": updated,
+            "ok": True, "updated": updated, "alias_ok": alias_ok,
             "empleado": {"ide": emp.ide, "codigo": emp.codigo,
                          "nombre": emp.nombre},
         })

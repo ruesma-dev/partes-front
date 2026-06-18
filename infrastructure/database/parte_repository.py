@@ -88,6 +88,8 @@ class RegistroView:
     parte_aprobado: bool
     # Nombre del trabajador (para la vista por obra; opcional).
     trabajador_nombre: Optional[str] = None
+    # True si el parte tiene PDF accesible en SharePoint (drive+item).
+    tiene_pdf: bool = False
 
 
 @dataclass
@@ -191,6 +193,8 @@ class ObraMatrixCell:
     has_inc: bool
     is_weekend: bool
     is_holiday: bool
+    document_id: Optional[str] = None
+    tiene_pdf: bool = False
 
 
 @dataclass
@@ -325,6 +329,17 @@ class ParteReviewRepository:
                 conn.execute(text(
                     "ALTER TABLE parte_documents ADD COLUMN IF NOT EXISTS "
                     "sharepoint_drive_id VARCHAR(255)"
+                ))
+                conn.execute(text(
+                    "CREATE TABLE IF NOT EXISTS empleado_alias ("
+                    "  nombre_norm VARCHAR(300) PRIMARY KEY,"
+                    "  empleado_ide INTEGER NOT NULL,"
+                    "  empleado_codigo VARCHAR(60),"
+                    "  empleado_nombre TEXT,"
+                    "  empleado_dni VARCHAR(40),"
+                    "  created_at_utc VARCHAR(40) NOT NULL,"
+                    "  created_by VARCHAR(120)"
+                    ")"
                 ))
             return True
         except Exception:
@@ -610,8 +625,16 @@ class ParteReviewRepository:
                 }
                 agg[wk] = w
             slot = w["days"].setdefault(
-                reg.fecha, {"normal": 0.0, "extra": 0.0, "inc": []}
+                reg.fecha, {"normal": 0.0, "extra": 0.0, "inc": [],
+                           "doc": None, "pdf": False}
             )
+            if slot["doc"] is None:
+                slot["doc"] = reg.document_id
+                slot["pdf"] = bool(
+                    reg.document is not None
+                    and reg.document.sharepoint_drive_id
+                    and reg.document.sharepoint_item_id
+                )
             if reg.es_incidencia:
                 if reg.incidencia_codigo:
                     slot["inc"].append(reg.incidencia_codigo)
@@ -644,6 +667,7 @@ class ParteReviewRepository:
                     label=_cell_label(n, e, inc),
                     normal=n, extra=e, has_inc=bool(inc),
                     is_weekend=dc.is_weekend, is_holiday=dc.is_holiday,
+                    document_id=slot.get("doc"), tiene_pdf=bool(slot.get("pdf")),
                 ))
                 idx = day_index[dc.date_iso]
                 col_n[idx] += n; col_e[idx] += e
@@ -1129,4 +1153,9 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
         parte_firmante_rol=doc.firmante_rol if doc is not None else None,
         parte_aprobado=bool(doc.approved) if doc is not None else False,
         trabajador_nombre=reg.empleado_nombre or reg.trabajador_nombre_leido,
+        tiene_pdf=bool(
+            doc is not None
+            and doc.sharepoint_drive_id
+            and doc.sharepoint_item_id
+        ),
     )

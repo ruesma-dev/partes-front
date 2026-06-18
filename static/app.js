@@ -415,6 +415,11 @@
         if (!res.ok || !res.d.ok) throw new Error((res.d && res.d.error) || "Error");
         var emp = res.d.empleado || {};
         var label = (emp.codigo ? emp.codigo + " · " : "") + (emp.nombre || "");
+        if (!res.d.updated && statusEl) {
+          statusEl.textContent = "⚠ Casado pero 0 registros actualizados (revisa el nombre leido).";
+          statusEl.className = "recon-status error";
+          return;
+        }
         if (card) {
           card.classList.add("recon-done");
           card.innerHTML = '<div class="recon-head"><div class="recon-id">' +
@@ -509,6 +514,11 @@
     }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
       .then(function (res) {
         if (!res.ok || !res.d.ok) throw new Error((res.d && res.d.error) || "Error");
+        if (!res.d.updated) {
+          flashEl(input, "error");
+          if (input) { input.disabled = false; input.value = ""; input.placeholder = "No se encontraron registros — reintenta"; }
+          return;
+        }
         flashEl(input, "saved");
         // El agrupado por trabajador cambia: recargamos para reflejarlo.
         window.location.reload();
@@ -630,6 +640,56 @@
     });
   }
 
+  // ---------------------------------------------------------------- //
+  // Modal de PDF del parte. Cualquier elemento con [data-parte-pdf]
+  // (= document_id) lo abre; opcional [data-parte-title] para el titulo.
+  // ---------------------------------------------------------------- //
+  function openPdfModal(documentId, title) {
+    var modal = document.getElementById("pdf-modal");
+    if (!modal) return;
+    var frame = document.getElementById("pdf-modal-frame");
+    var open = document.getElementById("pdf-modal-open");
+    var ttl = document.getElementById("pdf-modal-title");
+    var loading = document.getElementById("pdf-modal-loading");
+    var url = "/partes/" + encodeURIComponent(documentId) + "/preview";
+    if (ttl) ttl.textContent = title || "Parte";
+    if (open) open.href = url;
+    if (loading) loading.style.display = "";
+    if (frame) {
+      frame.onload = function () { if (loading) loading.style.display = "none"; };
+      frame.src = url;
+    }
+    modal.hidden = false;
+    document.body.classList.add("modal-open");
+  }
+
+  function closePdfModal() {
+    var modal = document.getElementById("pdf-modal");
+    if (!modal) return;
+    var frame = document.getElementById("pdf-modal-frame");
+    modal.hidden = true;
+    document.body.classList.remove("modal-open");
+    if (frame) { frame.src = "about:blank"; }
+  }
+
+  function wirePdfModal() {
+    var modal = document.getElementById("pdf-modal");
+    if (!modal) return;
+    // Disparadores en toda la pagina.
+    document.body.addEventListener("click", function (e) {
+      var trg = e.target.closest("[data-parte-pdf]");
+      if (trg) {
+        e.preventDefault();
+        openPdfModal(trg.getAttribute("data-parte-pdf"), trg.getAttribute("data-parte-title"));
+        return;
+      }
+      if (e.target.closest("[data-pdf-close]")) { e.preventDefault(); closePdfModal(); }
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && !modal.hidden) closePdfModal();
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Toggle del visor de PDF.
     var pdfBtn = document.getElementById("pdfToggle");
@@ -656,6 +716,7 @@
     document.querySelectorAll("table.filterable:not(.matrix)").forEach(wireSortable);
     document.querySelectorAll(".combo-emp").forEach(wireEmpleadoCombo);
     wireNameEditToggles();
+    wirePdfModal();
     wireConciliacion();
 
     var combos = Array.prototype.slice.call(document.querySelectorAll(".combo-hora"));
