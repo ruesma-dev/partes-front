@@ -52,6 +52,18 @@
     </div>
   </div>
 
+  <div id="undo-widget" class="undo-widget" hidden>
+    <button type="button" id="undo-btn" class="undo-btn" title="Deshacer la última acción">
+      <span class="undo-ico">↶</span> Deshacer<span class="undo-count" id="undo-count"></span>
+    </button>
+    <button type="button" id="undo-toggle" class="undo-toggle" title="Ver cambios recientes">▾</button>
+    <div class="undo-panel" id="undo-panel" hidden>
+      <div class="undo-panel-head">Cambios recientes (lo más nuevo primero)</div>
+      <ul class="undo-list" id="undo-list"></ul>
+      <div class="undo-panel-foot">Pulsa “Deshacer” para revertir el más reciente. Puedes repetir.</div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
   {% block scripts %}{% endblock %}
 </body>

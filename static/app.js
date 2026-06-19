@@ -690,6 +690,74 @@
     });
   }
 
+  // ---------------------------------------------------------------- //
+  // DESHACER: widget global. Lee el historial del servidor (persiste
+  // aunque cambies de pantalla) y deshace el ultimo cambio.
+  // ---------------------------------------------------------------- //
+  function _undoActionLabel(a) {
+    return ({
+      empleado: "Trabajador", registro_edit: "Horas",
+      registro_hora: "Codigo hora", parte_fecha: "Fecha",
+      parte_obra: "Obra",
+    })[a] || "Cambio";
+  }
+
+  function refreshUndo() {
+    var widget = document.getElementById("undo-widget");
+    if (!widget) return;
+    fetch("/api/undo/list", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var items = (data && data.items) || [];
+        if (!items.length) { widget.hidden = true; return; }
+        widget.hidden = false;
+        var cnt = document.getElementById("undo-count");
+        if (cnt) cnt.textContent = " (" + items.length + ")";
+        var ul = document.getElementById("undo-list");
+        if (ul) {
+          ul.innerHTML = "";
+          items.forEach(function (it, i) {
+            var li = document.createElement("li");
+            li.className = "undo-item" + (i === 0 ? " undo-next" : "");
+            li.innerHTML = '<span class="undo-tag">' + _esc(_undoActionLabel(it.action)) +
+              '</span> ' + _esc(it.description || "");
+            ul.appendChild(li);
+          });
+        }
+      }).catch(function () {});
+  }
+
+  function wireUndo() {
+    var widget = document.getElementById("undo-widget");
+    if (!widget) return;
+    var btn = document.getElementById("undo-btn");
+    var toggle = document.getElementById("undo-toggle");
+    var panel = document.getElementById("undo-panel");
+    if (btn) {
+      btn.addEventListener("click", function () {
+        btn.disabled = true;
+        fetch("/api/undo", {
+          method: "POST", headers: { Accept: "application/json" },
+        }).then(function (r) { return r.json(); })
+          .then(function (res) {
+            if (res && res.ok) {
+              window.location.reload();  // refleja el cambio revertido
+            } else {
+              btn.disabled = false;
+              refreshUndo();
+            }
+          }).catch(function () { btn.disabled = false; });
+      });
+    }
+    if (toggle && panel) {
+      toggle.addEventListener("click", function () {
+        panel.hidden = !panel.hidden;
+        if (!panel.hidden) refreshUndo();
+      });
+    }
+    refreshUndo();
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Toggle del visor de PDF.
     var pdfBtn = document.getElementById("pdfToggle");
@@ -717,6 +785,7 @@
     document.querySelectorAll(".combo-emp").forEach(wireEmpleadoCombo);
     wireNameEditToggles();
     wirePdfModal();
+    wireUndo();
     wireConciliacion();
 
     var combos = Array.prototype.slice.call(document.querySelectorAll(".combo-hora"));

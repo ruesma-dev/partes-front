@@ -19,6 +19,7 @@ Expone:
 from __future__ import annotations
 
 import logging
+import json
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -32,6 +33,7 @@ from infrastructure.database.orm_models import (
     EmpleadoAliasOrm,
     ParteDocumentOrm,
     ParteRegistroOrm,
+    UndoLogOrm,
 )
 from infrastructure.database.session_factory import SessionFactory
 from application.services import text_match as tm
@@ -258,6 +260,56 @@ def worker_key_for_registro(reg: ParteRegistroOrm) -> str:
     return "sin-trabajador"
 
 
+# ------------------------------------------------------------------ #
+# DESHACER: snapshots de filas (estado ANTERIOR) y su restauracion.
+# Un snapshot de registro captura TODOS los campos que cualquier accion
+# puede tocar, asi la restauracion es uniforme para cualquier tipo de cambio.
+# ------------------------------------------------------------------ #
+_REG_UNDO_FIELDS = (
+    "empleado_ide", "empleado_codigo", "empleado_nombre", "empleado_dni",
+    "tipo_hora", "horas", "es_incidencia",
+    "hora_ide", "hora_codigo", "hora_descripcion", "hora_ext",
+    "hora_precio_coste", "hora_precio_nomina", "hora_match_method",
+    "fecha", "fecha_int", "obra_ide", "obra_codigo", "obra_nombre",
+)
+_DOC_UNDO_FIELDS = (
+    "fecha", "fecha_int", "obra_ide", "obra_codigo", "obra_nombre",
+    "obra_match_method", "obra_match_score",
+)
+
+
+def _reg_snapshot(reg: ParteRegistroOrm) -> dict:
+    snap = {"id": reg.id}
+    for f in _REG_UNDO_FIELDS:
+        snap[f] = getattr(reg, f, None)
+    return snap
+
+
+def _apply_reg_snapshot(reg: ParteRegistroOrm, snap: dict) -> None:
+    for f in _REG_UNDO_FIELDS:
+        if f in snap:
+            setattr(reg, f, snap[f])
+
+
+def _doc_snapshot(doc: ParteDocumentOrm) -> dict:
+    snap = {"id": doc.id}
+    for f in _DOC_UNDO_FIELDS:
+        snap[f] = getattr(doc, f, None)
+    return snap
+
+
+def _apply_doc_snapshot(doc: ParteDocumentOrm, snap: dict) -> None:
+    for f in _DOC_UNDO_FIELDS:
+        if f in snap:
+            setattr(doc, f, snap[f])
+
+
+def _reg_label(reg: ParteRegistroOrm) -> str:
+    """Etiqueta legible de un registro para el historial."""
+    nom = reg.empleado_nombre or reg.trabajador_nombre_leido or "trabajador"
+    return f"{nom} ({reg.fecha or '?'})"
+
+
 def _fmt_h(x: float) -> str:
     """Formatea horas sin decimales superfluos: 8.0->'8', 8.5->'8.5'."""
     if x is None:
@@ -339,6 +391,17 @@ class ParteReviewRepository:
                     "  empleado_dni VARCHAR(40),"
                     "  created_at_utc VARCHAR(40) NOT NULL,"
                     "  created_by VARCHAR(120)"
+                    ")"
+                ))
+                conn.execute(text(
+                    "CREATE TABLE IF NOT EXISTS undo_log ("
+                    "  id SERIAL PRIMARY KEY,"
+                    "  created_at_utc VARCHAR(40) NOT NULL,"
+                    "  action VARCHAR(40) NOT NULL,"
+                    "  description TEXT NOT NULL,"
+                    "  payload TEXT NOT NULL,"
+                    "  undone BOOLEAN NOT NULL DEFAULT false,"
+                    "  actor VARCHAR(120)"
                     ")"
                 ))
             return True
@@ -839,10 +902,16 @@ class ParteReviewRepository:
             reg = session.get(ParteRegistroOrm, registro_id)
             if reg is None:
                 return False
+            snap = _reg_snapshot(reg)
+            label = _reg_label(reg)
             if tipo_hora is not None:
                 reg.tipo_hora = tipo_hora or None
             if horas is not None:
                 reg.horas = horas
+            self._record_undo(
+                session, action="registro_edit",
+                description=f"Editar horas · {label}", registros=[snap],
+            )
             session.commit()
         return True
 
@@ -861,6 +930,8 @@ class ParteReviewRepository:
             reg = session.get(ParteRegistroOrm, registro_id)
             if reg is None:
                 return False
+            snap = _reg_snapshot(reg)
+            label = _reg_label(reg)
             reg.hora_ide = hora_ide
             reg.hora_codigo = hora_codigo
             reg.hora_descripcion = hora_descripcion
@@ -870,6 +941,11 @@ class ParteReviewRepository:
             reg.hora_match_method = "manual"
             if hora_ext is not None and not reg.es_incidencia:
                 reg.tipo_hora = "extra" if hora_ext == 1 else "normal"
+            self._record_undo(
+                session, action="registro_hora",
+                description=f"Cambiar codigo de hora · {label}",
+                registros=[snap],
+            )
             session.commit()
         return True
 
@@ -942,17 +1018,27 @@ class ParteReviewRepository:
                 .where(ParteRegistroOrm.empleado_ide.is_(None))
             )
             regs = list(session.execute(stmt).scalars().all())
-            n = 0
-            for r in regs:
-                if tm.normalize(r.trabajador_nombre_leido) != target:
-                    continue
+            affected = [
+                r for r in regs
+                if tm.normalize(r.trabajador_nombre_leido) == target
+            ]
+            if not affected:
+                return 0
+            reg_snaps = [_reg_snapshot(r) for r in affected]
+            alias_snaps = [self._alias_snapshot(session, target)]
+            for r in affected:
                 r.empleado_ide = ide
                 r.empleado_codigo = codigo
                 r.empleado_nombre = nombre
                 r.empleado_dni = dni
-                n += 1
+            self._record_undo(
+                session, action="empleado",
+                description=f"Casar '{nombre_leido}' → "
+                            f"{nombre or codigo or ide} ({len(affected)} reg.)",
+                registros=reg_snaps, aliases=alias_snaps,
+            )
             session.commit()
-        return n
+        return len(affected)
 
     def upsert_empleado_alias(
         self, *, nombre_leido: str, ide: int,
@@ -977,6 +1063,122 @@ class ParteReviewRepository:
             row.created_by = created_by
             session.commit()
 
+    # ----------------------------------------------------------------- #
+    # DESHACER: registrar, restaurar y listar acciones.
+    # ----------------------------------------------------------------- #
+    def _alias_snapshot(self, session, norm: str) -> dict:
+        row = session.get(EmpleadoAliasOrm, norm)
+        if row is None:
+            return {"nombre_norm": norm, "existed": False}
+        return {
+            "nombre_norm": norm, "existed": True,
+            "empleado_ide": row.empleado_ide,
+            "empleado_codigo": row.empleado_codigo,
+            "empleado_nombre": row.empleado_nombre,
+            "empleado_dni": row.empleado_dni,
+            "created_at_utc": row.created_at_utc,
+            "created_by": row.created_by,
+        }
+
+    def _apply_alias_snapshot(self, session, snap: dict) -> None:
+        norm = snap.get("nombre_norm")
+        if not norm:
+            return
+        row = session.get(EmpleadoAliasOrm, norm)
+        if not snap.get("existed"):
+            if row is not None:
+                session.delete(row)
+            return
+        if row is None:
+            row = EmpleadoAliasOrm(
+                nombre_norm=norm,
+                created_at_utc=snap.get("created_at_utc")
+                or datetime.now(timezone.utc).isoformat(),
+            )
+            session.add(row)
+        row.empleado_ide = snap.get("empleado_ide")
+        row.empleado_codigo = snap.get("empleado_codigo")
+        row.empleado_nombre = snap.get("empleado_nombre")
+        row.empleado_dni = snap.get("empleado_dni")
+        row.created_by = snap.get("created_by")
+
+    def _record_undo(
+        self, session, *, action: str, description: str,
+        registros: list[dict] | None = None,
+        documents: list[dict] | None = None,
+        aliases: list[dict] | None = None,
+    ) -> int:
+        """Inserta una entrada de historial DENTRO de la sesion dada (atomico
+        con la mutacion). Devuelve el id."""
+        payload = {
+            "registros": registros or [],
+            "documents": documents or [],
+            "aliases": aliases or [],
+        }
+        row = UndoLogOrm(
+            created_at_utc=datetime.now(timezone.utc).isoformat(),
+            action=action, description=description,
+            payload=json.dumps(payload, default=str), undone=False,
+        )
+        session.add(row)
+        session.flush()
+        return row.id
+
+    def list_undo(self, *, limit: int = 15) -> list[dict]:
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(UndoLogOrm)
+                .where(UndoLogOrm.undone.is_(False))
+                .order_by(UndoLogOrm.id.desc())
+                .limit(limit)
+            )
+            rows = list(session.execute(stmt).scalars().all())
+            return [
+                {"id": r.id, "action": r.action,
+                 "description": r.description, "created_at": r.created_at_utc}
+                for r in rows
+            ]
+
+    def count_undo(self) -> int:
+        with self._session_factory.create_session() as session:
+            stmt = select(UndoLogOrm).where(UndoLogOrm.undone.is_(False))
+            return len(list(session.execute(stmt).scalars().all()))
+
+    def undo_last(self) -> dict:
+        """Deshace la accion no-deshecha mas reciente: restaura el estado
+        anterior de registros/documento/alias y la marca como deshecha."""
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(UndoLogOrm)
+                .where(UndoLogOrm.undone.is_(False))
+                .order_by(UndoLogOrm.id.desc())
+                .limit(1)
+            )
+            row = session.execute(stmt).scalars().first()
+            if row is None:
+                return {"ok": False, "error": "No hay nada que deshacer."}
+            description = row.description
+            try:
+                payload = json.loads(row.payload)
+            except Exception:  # noqa: BLE001
+                payload = {}
+            for snap in payload.get("documents", []):
+                doc = session.get(ParteDocumentOrm, snap.get("id"))
+                if doc is not None:
+                    _apply_doc_snapshot(doc, snap)
+            for snap in payload.get("registros", []):
+                reg = session.get(ParteRegistroOrm, snap.get("id"))
+                if reg is not None:
+                    _apply_reg_snapshot(reg, snap)
+            for snap in payload.get("aliases", []):
+                self._apply_alias_snapshot(session, snap)
+            row.undone = True
+            session.commit()
+            remaining = len(list(session.execute(
+                select(UndoLogOrm).where(UndoLogOrm.undone.is_(False))
+            ).scalars().all()))
+        return {"ok": True, "description": description, "remaining": remaining}
+
     def get_registro_leido(self, registro_id: int) -> str | None:
         with self._session_factory.create_session() as session:
             r = session.get(ParteRegistroOrm, registro_id)
@@ -997,17 +1199,27 @@ class ParteReviewRepository:
                 .join(ParteDocumentOrm)
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
-            n = 0
-            for r in session.execute(stmt).scalars().all():
-                if tm.normalize(r.trabajador_nombre_leido) != target:
-                    continue
+            affected = [
+                r for r in session.execute(stmt).scalars().all()
+                if tm.normalize(r.trabajador_nombre_leido) == target
+            ]
+            if not affected:
+                return 0
+            reg_snaps = [_reg_snapshot(r) for r in affected]
+            alias_snaps = [self._alias_snapshot(session, target)]
+            for r in affected:
                 r.empleado_ide = ide
                 r.empleado_codigo = codigo
                 r.empleado_nombre = nombre
                 r.empleado_dni = dni
-                n += 1
+            self._record_undo(
+                session, action="empleado",
+                description=f"Reasignar '{nombre_leido}' → "
+                            f"{nombre or codigo or ide} ({len(affected)} reg.)",
+                registros=reg_snaps, aliases=alias_snaps,
+            )
             session.commit()
-        return n
+        return len(affected)
 
     def reassign_empleado_by_worker_key(
         self, *, worker_key: str, ide: int,
@@ -1021,20 +1233,33 @@ class ParteReviewRepository:
                 .join(ParteDocumentOrm)
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
-            n = 0
-            leidos: set[str] = set()
-            for r in session.execute(stmt).scalars().all():
-                if worker_key_for_registro(r) != worker_key:
-                    continue
-                if r.trabajador_nombre_leido:
-                    leidos.add(r.trabajador_nombre_leido)
+            affected = [
+                r for r in session.execute(stmt).scalars().all()
+                if worker_key_for_registro(r) == worker_key
+            ]
+            if not affected:
+                return 0, []
+            reg_snaps = [_reg_snapshot(r) for r in affected]
+            leidos = sorted({
+                r.trabajador_nombre_leido for r in affected
+                if r.trabajador_nombre_leido
+            })
+            alias_snaps = [
+                self._alias_snapshot(session, tm.normalize(l)) for l in leidos
+            ]
+            for r in affected:
                 r.empleado_ide = ide
                 r.empleado_codigo = codigo
                 r.empleado_nombre = nombre
                 r.empleado_dni = dni
-                n += 1
+            self._record_undo(
+                session, action="empleado",
+                description=f"Reasignar trabajador → "
+                            f"{nombre or codigo or ide} ({len(affected)} reg.)",
+                registros=reg_snaps, aliases=alias_snaps,
+            )
             session.commit()
-        return n, sorted(leidos)
+        return len(affected), leidos
 
     def get_sharepoint_ref(self, document_id: str) -> dict | None:
         """Datos para descargar el PDF de SharePoint por Graph."""
@@ -1061,11 +1286,20 @@ class ParteReviewRepository:
             doc = session.get(ParteDocumentOrm, document_id)
             if doc is None:
                 return False
+            doc_snap = _doc_snapshot(doc)
+            reg_snaps = [_reg_snapshot(r) for r in doc.registros]
+            old = doc.fecha
             doc.fecha = fecha_iso
             doc.fecha_int = fecha_int
             for reg in doc.registros:
                 reg.fecha = fecha_iso
                 reg.fecha_int = fecha_int
+            self._record_undo(
+                session, action="parte_fecha",
+                description=f"Cambiar fecha del parte {doc.obra_codigo or ''} "
+                            f"({old or '?'} → {fecha_iso})",
+                documents=[doc_snap], registros=reg_snaps,
+            )
             session.commit()
         return True
 
@@ -1081,6 +1315,8 @@ class ParteReviewRepository:
             doc = session.get(ParteDocumentOrm, document_id)
             if doc is None:
                 return False
+            doc_snap = _doc_snapshot(doc)
+            reg_snaps = [_reg_snapshot(r) for r in doc.registros]
             doc.obra_ide = obra_ide
             doc.obra_codigo = obra_codigo
             doc.obra_nombre = obra_nombre
@@ -1090,6 +1326,11 @@ class ParteReviewRepository:
                 reg.obra_ide = obra_ide
                 reg.obra_codigo = obra_codigo
                 reg.obra_nombre = obra_nombre
+            self._record_undo(
+                session, action="parte_obra",
+                description=f"Cambiar obra del parte → {obra_codigo or obra_nombre or '?'}",
+                documents=[doc_snap], registros=reg_snaps,
+            )
             session.commit()
         return True
 

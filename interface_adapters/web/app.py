@@ -681,6 +681,28 @@ def build_app(settings: Settings) -> FastAPI:
                          "nombre": emp.nombre},
         })
 
+    # ----------------------------- DESHACER --------------------------- #
+    @app.get("/api/undo/list", include_in_schema=False)
+    def undo_list() -> JSONResponse:
+        try:
+            items = repository.list_undo(limit=15)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[undo] list fallo: %r", exc)
+            return JSONResponse({"ok": False, "items": [], "count": 0})
+        return JSONResponse({"ok": True, "items": items, "count": len(items)})
+
+    @app.post("/api/undo", include_in_schema=False)
+    def undo_apply() -> JSONResponse:
+        try:
+            res = repository.undo_last()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("[undo] fallo al deshacer")
+            return JSONResponse(
+                {"ok": False, "error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+        return JSONResponse(res, status_code=200 if res.get("ok") else 400)
+
     @app.get("/partes", response_class=HTMLResponse)
     def partes_list(
         request: Request,

@@ -199,3 +199,19 @@ class EmpleadoAliasOrm(Base):
     empleado_dni: Mapped[str | None] = mapped_column(String(40), nullable=True)
     created_at_utc: Mapped[str] = mapped_column(String(40), nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class UndoLogOrm(Base):
+    """Historial de cambios para DESHACER. Cada fila = una accion del usuario
+    (reasignar, casar, editar horas/fecha/obra...). 'payload' guarda el estado
+    ANTERIOR de las filas afectadas (registros/documento/alias) en JSON, para
+    poder restaurarlo. 'undone' marca si ya se deshizo."""
+    __tablename__ = "undo_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at_utc: Mapped[str] = mapped_column(String(40), nullable=False)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    undone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    actor: Mapped[str | None] = mapped_column(String(120), nullable=True)

@@ -560,3 +560,40 @@ body.modal-open { overflow: hidden; }
 .mx-cell-pdf { cursor: pointer; }
 .mx-cell-pdf:hover { outline: 2px solid var(--brand); outline-offset: -2px; background: var(--brand-soft); }
 .cell-parte { white-space: nowrap; }
+
+/* ========================= DESHACER (widget) ====================== */
+.undo-widget { position: fixed; right: 18px; bottom: 18px; z-index: 150; display: flex; align-items: flex-end; }
+.undo-widget[hidden] { display: none; }
+.undo-btn {
+  background: var(--brand); color: #fff; border: none; border-radius: 10px 0 0 10px;
+  padding: 10px 14px; font: inherit; font-weight: 700; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.20); display: flex; align-items: center; gap: 6px;
+}
+.undo-btn:hover { background: var(--brand-strong); }
+.undo-btn:disabled { opacity: 0.6; cursor: default; }
+.undo-ico { font-size: 1.1rem; line-height: 1; }
+.undo-count { font-weight: 700; }
+.undo-toggle {
+  background: var(--brand-strong); color: #fff; border: none; border-radius: 0 10px 10px 0;
+  padding: 10px 9px; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,0.20);
+  border-left: 1px solid rgba(255,255,255,0.25); font: inherit;
+}
+.undo-toggle:hover { background: #5e1626; }
+.undo-panel {
+  position: absolute; right: 0; bottom: calc(100% + 8px); width: 360px; max-width: 86vw;
+  max-height: 50vh; overflow-y: auto; background: var(--paper);
+  border: 1px solid var(--line-strong); border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.22); padding: 8px;
+}
+.undo-panel[hidden] { display: none; }
+.undo-panel-head { font-weight: 700; font-size: 0.8rem; color: var(--steel); padding: 4px 8px 8px; }
+.undo-list { list-style: none; margin: 0; padding: 0; }
+.undo-item { padding: 7px 8px; border-top: 1px solid var(--line); font-size: 0.84rem; }
+.undo-item:first-child { border-top: none; }
+.undo-next { background: var(--brand-soft); border-radius: 7px; }
+.undo-tag {
+  display: inline-block; font-size: 0.72rem; font-weight: 700; color: var(--brand);
+  background: #fff; border: 1px solid var(--line-strong); border-radius: 20px;
+  padding: 1px 7px; margin-right: 6px;
+}
+.undo-panel-foot { font-size: 0.74rem; color: var(--steel); padding: 8px 8px 4px; }
