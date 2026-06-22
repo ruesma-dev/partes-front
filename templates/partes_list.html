@@ -65,7 +65,7 @@
     <tbody>
       {% for p in partes %}
       <tr>
-        <td><a class="link-strong" href="/partes/{{ p.document_id }}">{{ p.fecha|fecha }}</a></td>
+        <td><a class="link-strong" href="/partes/{{ p.document_id }}">{{ p.fecha|fecha }}</a>{% if p.es_futuro %} <span class="warn-future" title="Fecha futura: posterior al mes en curso">⚠</span>{% endif %}</td>
         <td>
           {{ p.obra_codigo or "—" }}
           {% if p.obra_nombre %}<div class="cell-sub">{{ p.obra_nombre }}</div>{% endif %}

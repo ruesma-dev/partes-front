@@ -168,6 +168,18 @@ class ParteRegistroOrm(Base):
     horas: Mapped[float | None] = mapped_column(Float)
     partida: Mapped[str | None] = mapped_column(String(128))
 
+    # --- PARTIDA + RECURSO casados por sv3 (sv4 SOLO LEE) --- #
+    partida_ide: Mapped[int | None] = mapped_column(Integer)
+    partida_cod: Mapped[str | None] = mapped_column(String(64))
+    partida_res: Mapped[str | None] = mapped_column(String(255))
+    partida_capitulo: Mapped[str | None] = mapped_column(String(8))
+    partida_match_method: Mapped[str | None] = mapped_column(String(24))
+    partida_match_score: Mapped[float | None] = mapped_column(Float)
+    recurso_ide: Mapped[int | None] = mapped_column(Integer)
+    recurso_cif: Mapped[str | None] = mapped_column(String(64))
+    hmo_ide: Mapped[int | None] = mapped_column(Integer)
+    parte_estado: Mapped[str | None] = mapped_column(String(16))
+
     # --- CODIGO DE HORA resuelto (Sigrid auxhor) --- #
     hora_ide: Mapped[int | None] = mapped_column(Integer)
     hora_codigo: Mapped[str | None] = mapped_column(String(64))

@@ -597,3 +597,23 @@ body.modal-open { overflow: hidden; }
   padding: 1px 7px; margin-right: 6px;
 }
 .undo-panel-foot { font-size: 0.74rem; color: var(--steel); padding: 8px 8px 4px; }
+
+/* ================= Aviso de fecha futura + conciliacion ZIP ======= */
+.warn-future {
+  display: inline-block; font-size: 0.72rem; font-weight: 800; line-height: 1;
+  color: #8a5a00; background: #fff3d6; border: 1px solid #e7c66b;
+  border-radius: 20px; padding: 2px 7px; margin-left: 6px; vertical-align: middle;
+  white-space: nowrap;
+}
+.mx-future { background: #fff3d6 !important; color: #8a5a00; }
+.recon-head-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.alert.warn { background: #fff3d6; border: 1px solid #e7c66b; color: #6b4500; border-radius: 10px; padding: 10px 14px; }
+
+/* Casado partida/recurso (visualizacion) */
+.badge.cap-ci{background:#e8eefc;color:#2546a8;}
+.badge.cap-cd{background:#eaf6ec;color:#2e7d4f;}
+.badge.cap-cp{background:#fdf1e3;color:#9a5b1a;}
+.badge.cap-otro{background:#eee;color:#666;}
+.badge.muted-badge{background:#eef0f2;color:#6b7280;}
+.partida-cod{font-weight:600;margin-left:4px;}
+.cell-partida .cell-sub,.cell-recurso .cell-sub{color:#6b7280;margin-top:2px;}

@@ -27,13 +27,26 @@
   <div class="recon-card recon-{{ fila.bucket }}" data-nombre="{{ fila.nombre_leido }}">
     <div class="recon-head">
       <div class="recon-id">
-        <span class="recon-name">{{ fila.nombre_leido }}</span>
+        <span class="recon-name">{{ fila.nombre_leido }}
+          {% set _fut = namespace(any=false) %}
+          {% for pt in fila.partes %}{% if pt.es_futuro %}{% set _fut.any = true %}{% endif %}{% endfor %}
+          {% if _fut.any %}<span class="warn-future" title="Parte con fecha futura (posterior al mes en curso)">⚠ futuro</span>{% endif %}
+        </span>
         <span class="recon-meta">{{ fila.num_registros }} registro{{ 's' if fila.num_registros != 1 else '' }}
+          {% if fila.partes %}· {{ fila.partes|map(attribute='fecha')|select|join(', ') }}{% endif %}
           {% if fila.obras %}· obras: {{ fila.obras|join(', ') }}{% endif %}
           {% if fila.categorias %}· {{ fila.categorias|join(', ') }}{% endif %}
         </span>
       </div>
-      <div>
+      <div class="recon-head-right">
+        {% if preview_enabled %}
+          {% for pt in fila.partes %}
+            {% if pt.tiene_pdf %}
+            <button type="button" class="btn secondary small" data-parte-pdf="{{ pt.document_id }}"
+                    data-parte-title="Parte · {{ pt.obra_codigo or '' }} · {{ pt.fecha or '' }} · {{ fila.nombre_leido }}">Ver PDF{% if fila.partes|length > 1 and pt.fecha %} · {{ pt.fecha }}{% endif %}</button>
+            {% endif %}
+          {% endfor %}
+        {% endif %}
         {% if fila.bucket == 'auto' %}<span class="badge ok">Candidato claro</span>
         {% elif fila.bucket == 'revisar' %}<span class="badge warn">A revisar</span>
         {% elif fila.bucket == 'categoria' %}<span class="badge">Parece categoria</span>

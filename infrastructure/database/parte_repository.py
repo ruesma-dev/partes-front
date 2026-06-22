@@ -39,11 +39,33 @@ from infrastructure.database.session_factory import SessionFactory
 from application.services import text_match as tm
 from application.services.calendar_builder import (
     build_period_options,
+    is_future_fecha,
     parse_period_key,
     period_bounds,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _date_from_iso(ts: str | None) -> date | None:
+    """Fecha (date) a partir de un ISO timestamp/fecha 'YYYY-MM-DD...'."""
+    if not ts:
+        return None
+    try:
+        s = str(ts)
+        return date(int(s[0:4]), int(s[5:7]), int(s[8:10]))
+    except (ValueError, IndexError, TypeError):
+        return None
+
+
+def _doc_es_futuro(doc: "ParteDocumentOrm | None") -> bool:
+    """True si la fecha del parte (dia de trabajo) es posterior al mes en curso
+    de SU FECHA DE REGISTRO (created_at_utc, cuando se ingirio el parte). Si no
+    hay fecha de registro, cae a la fecha actual."""
+    if doc is None:
+        return False
+    ref = _date_from_iso(getattr(doc, "created_at_utc", None))
+    return is_future_fecha(getattr(doc, "fecha", None), today=ref)
 
 
 # ------------------------------------------------------------------ #
@@ -92,6 +114,18 @@ class RegistroView:
     trabajador_nombre: Optional[str] = None
     # True si el parte tiene PDF accesible en SharePoint (drive+item).
     tiene_pdf: bool = False
+    # True si la fecha del parte es posterior al mes en curso de su registro.
+    es_futuro: bool = False
+    # --- Casado de PARTIDA (presupuesto) por sv3 --- #
+    partida_cod: Optional[str] = None
+    partida_res: Optional[str] = None
+    partida_capitulo: Optional[str] = None         # CD/CI/CP
+    partida_match_method: Optional[str] = None      # auto_nombre|auto_categoria|manual|sin
+    # --- Casado de RECURSO / parte de trabajo por sv3 --- #
+    recurso_ide: Optional[int] = None
+    recurso_cif: Optional[str] = None
+    hmo_ide: Optional[int] = None
+    parte_estado: Optional[str] = None              # ok|sin_recurso|sin_parte
 
 
 @dataclass
@@ -123,6 +157,7 @@ class ParteRow:
     firmante_rol: Optional[str]
     review_required: Optional[bool]
     approved: bool
+    es_futuro: bool = False
 
 
 @dataclass
@@ -157,6 +192,7 @@ class ParteDetail:
     approved_by: Optional[str]
     source_filename: Optional[str]
     sharepoint_url: Optional[str]
+    es_futuro: bool = False
     empleados: list[ParteEmpleadoView] = field(default_factory=list)
 
 
@@ -184,6 +220,7 @@ class ObraDayCol:
     is_weekend: bool
     is_holiday: bool
     holiday_name: Optional[str]
+    es_futuro: bool = False
 
 
 @dataclass
@@ -197,6 +234,7 @@ class ObraMatrixCell:
     is_holiday: bool
     document_id: Optional[str] = None
     tiene_pdf: bool = False
+    es_futuro: bool = False
 
 
 @dataclass
@@ -382,6 +420,20 @@ class ParteReviewRepository:
                     "ALTER TABLE parte_documents ADD COLUMN IF NOT EXISTS "
                     "sharepoint_drive_id VARCHAR(255)"
                 ))
+                # Columnas del casado partida/recurso (las crea sv3; aqui de
+                # forma idempotente por si sv4 inicializa primero). SOLO LEE.
+                for col_ddl in (
+                    "partida_ide INTEGER", "partida_cod VARCHAR(64)",
+                    "partida_res VARCHAR(255)", "partida_capitulo VARCHAR(8)",
+                    "partida_match_method VARCHAR(24)",
+                    "partida_match_score DOUBLE PRECISION",
+                    "recurso_ide INTEGER", "recurso_cif VARCHAR(64)",
+                    "hmo_ide INTEGER", "parte_estado VARCHAR(16)",
+                ):
+                    conn.execute(text(
+                        "ALTER TABLE parte_registros ADD COLUMN IF NOT EXISTS "
+                        + col_ddl
+                    ))
                 conn.execute(text(
                     "CREATE TABLE IF NOT EXISTS empleado_alias ("
                     "  nombre_norm VARCHAR(300) PRIMARY KEY,"
@@ -689,7 +741,7 @@ class ParteReviewRepository:
                 agg[wk] = w
             slot = w["days"].setdefault(
                 reg.fecha, {"normal": 0.0, "extra": 0.0, "inc": [],
-                           "doc": None, "pdf": False}
+                           "doc": None, "pdf": False, "es_futuro": False}
             )
             if slot["doc"] is None:
                 slot["doc"] = reg.document_id
@@ -698,6 +750,7 @@ class ParteReviewRepository:
                     and reg.document.sharepoint_drive_id
                     and reg.document.sharepoint_item_id
                 )
+                slot["es_futuro"] = _doc_es_futuro(reg.document)
             if reg.es_incidencia:
                 if reg.incidencia_codigo:
                     slot["inc"].append(reg.incidencia_codigo)
@@ -708,6 +761,7 @@ class ParteReviewRepository:
 
         col_n = [0.0] * len(days)
         col_e = [0.0] * len(days)
+        col_future = [False] * len(days)
         total_n = total_e = 0.0
         total_inc = 0
         rows: list[ObraMatrixRow] = []
@@ -725,15 +779,19 @@ class ParteReviewRepository:
                     continue
                 n = float(slot["normal"]); e = float(slot["extra"])
                 inc = slot["inc"]
+                fut = bool(slot.get("es_futuro"))
                 cells.append(ObraMatrixCell(
                     date_iso=dc.date_iso,
                     label=_cell_label(n, e, inc),
                     normal=n, extra=e, has_inc=bool(inc),
                     is_weekend=dc.is_weekend, is_holiday=dc.is_holiday,
                     document_id=slot.get("doc"), tiene_pdf=bool(slot.get("pdf")),
+                    es_futuro=fut,
                 ))
                 idx = day_index[dc.date_iso]
                 col_n[idx] += n; col_e[idx] += e
+                if fut:
+                    col_future[idx] = True
                 row_n += n; row_e += e
                 total_n += n; total_e += e
                 total_inc += len(inc)
@@ -743,6 +801,9 @@ class ParteReviewRepository:
                 total_extra=round(row_e, 2),
             ))
         rows.sort(key=lambda r: (0 if r.matched else 1, _norm(r.nombre)))
+
+        for i, dc in enumerate(days):
+            dc.es_futuro = col_future[i]
 
         col_totals = [
             ObraColTotal(date_iso=days[i].date_iso,
@@ -816,6 +877,7 @@ class ParteReviewRepository:
                     firmante_rol=doc.firmante_rol,
                     review_required=doc.review_required,
                     approved=doc.approved,
+                    es_futuro=_doc_es_futuro(doc),
                 )
             )
 
@@ -865,6 +927,7 @@ class ParteReviewRepository:
                 approved_by=doc.approved_by,
                 source_filename=doc.source_filename,
                 sharepoint_url=doc.sharepoint_url,
+                es_futuro=_doc_es_futuro(doc),
             )
 
             # Agrupar registros por empleado (linea de la tabla PERSONAL).
@@ -964,27 +1027,41 @@ class ParteReviewRepository:
             )
             regs = list(session.execute(stmt).scalars().all())
 
-        groups: dict[str, dict] = {}
-        for r in regs:
-            leido = (r.trabajador_nombre_leido or "").strip()
-            norm = tm.normalize(leido)
-            if not norm:
-                continue
-            g = groups.get(norm)
-            if g is None:
-                g = {
-                    "nombre_leido": leido or norm,
-                    "nombre_norm": norm,
-                    "num_registros": 0,
-                    "obras": set(),
-                    "categorias": set(),
-                }
-                groups[norm] = g
-            g["num_registros"] += 1
-            if r.obra_codigo:
-                g["obras"].add(r.obra_codigo)
-            if r.categoria:
-                g["categorias"].add(r.categoria)
+            groups: dict[str, dict] = {}
+            for r in regs:
+                leido = (r.trabajador_nombre_leido or "").strip()
+                norm = tm.normalize(leido)
+                if not norm:
+                    continue
+                g = groups.get(norm)
+                if g is None:
+                    g = {
+                        "nombre_leido": leido or norm,
+                        "nombre_norm": norm,
+                        "num_registros": 0,
+                        "obras": set(),
+                        "categorias": set(),
+                        "partes": {},
+                    }
+                    groups[norm] = g
+                g["num_registros"] += 1
+                if r.obra_codigo:
+                    g["obras"].add(r.obra_codigo)
+                if r.categoria:
+                    g["categorias"].add(r.categoria)
+                if r.document_id and r.document_id not in g["partes"]:
+                    doc = r.document  # sesion abierta: lazy load OK
+                    g["partes"][r.document_id] = {
+                        "document_id": r.document_id,
+                        "fecha": r.fecha,
+                        "obra_codigo": r.obra_codigo,
+                        "tiene_pdf": bool(
+                            doc is not None
+                            and doc.sharepoint_drive_id
+                            and doc.sharepoint_item_id
+                        ),
+                        "es_futuro": _doc_es_futuro(doc),
+                    }
 
         out = []
         for g in groups.values():
@@ -994,6 +1071,9 @@ class ParteReviewRepository:
                 "num_registros": g["num_registros"],
                 "obras": sorted(g["obras"]),
                 "categorias": sorted(g["categorias"]),
+                "partes": sorted(
+                    g["partes"].values(), key=lambda x: x["fecha"] or ""
+                ),
             })
         out.sort(key=lambda x: (-x["num_registros"], x["nombre_leido"].lower()))
         return out
@@ -1399,4 +1479,13 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
             and doc.sharepoint_drive_id
             and doc.sharepoint_item_id
         ),
+        es_futuro=_doc_es_futuro(doc),
+        partida_cod=reg.partida_cod,
+        partida_res=reg.partida_res,
+        partida_capitulo=reg.partida_capitulo,
+        partida_match_method=reg.partida_match_method,
+        recurso_ide=reg.recurso_ide,
+        recurso_cif=reg.recurso_cif,
+        hmo_ide=reg.hmo_ide,
+        parte_estado=reg.parte_estado,
     )

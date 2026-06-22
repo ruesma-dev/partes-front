@@ -82,6 +82,30 @@ def period_bounds(
     return start, end
 
 
+def future_threshold(today: date | None = None) -> date:
+    """Fecha limite a partir de la cual un parte se considera FUTURO: el fin
+    del mes en curso tomando la convencion (natural o nomina) que termine MAS
+    TARDE. Hoy 19/06 -> max(30/06 natural, 15/07 nomina) = 15/07."""
+    d = today or date.today()
+    yn, mn = period_of(d, MODE_NATURAL)
+    _, end_nat = period_bounds(yn, mn, MODE_NATURAL)
+    yp, mp = period_of(d, MODE_NOMINA)
+    _, end_nom = period_bounds(yp, mp, MODE_NOMINA)
+    return max(end_nat, end_nom)
+
+
+def is_future_fecha(fecha_iso: str | None, today: date | None = None) -> bool:
+    """True si la fecha (YYYY-MM-DD) es posterior al umbral de mes en curso."""
+    if not fecha_iso:
+        return False
+    try:
+        parts = str(fecha_iso)[:10].split("-")
+        fd = date(int(parts[0]), int(parts[1]), int(parts[2]))
+    except (ValueError, IndexError):
+        return False
+    return fd > future_threshold(today)
+
+
 @dataclass
 class PeriodOption:
     key: str    # "2026-04"

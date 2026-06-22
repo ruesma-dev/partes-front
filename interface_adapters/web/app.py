@@ -491,6 +491,7 @@ def build_app(settings: Settings) -> FastAPI:
                 "num_registros": p["num_registros"],
                 "obras": p["obras"],
                 "categorias": p["categorias"],
+                "partes": p.get("partes", []),
                 "bucket": bucket,
                 "candidates": [
                     {"ide": c.ide, "codigo": c.codigo, "nombre": c.nombre,
@@ -503,6 +504,7 @@ def build_app(settings: Settings) -> FastAPI:
             "request": request,
             "title": settings.app_title,
             "sigrid_enabled": settings.sigrid_lookup_enabled,
+            "preview_enabled": settings.preview_enabled,
             "empleados_total": len(empleados),
             "filas": filas,
             "n_total": len(filas),

@@ -64,8 +64,8 @@
         <tr>
           <th class="mx-name">Trabajador</th>
           {% for d in detail.days %}
-          <th class="mx-day{% if d.is_weekend %} mx-we{% endif %}{% if d.is_holiday %} mx-hol{% endif %}"
-              title="{{ d.date_iso }}{% if d.holiday_name %} · {{ d.holiday_name }}{% endif %}">{{ d.day }}</th>
+          <th class="mx-day{% if d.is_weekend %} mx-we{% endif %}{% if d.is_holiday %} mx-hol{% endif %}{% if d.es_futuro %} mx-future{% endif %}"
+              title="{{ d.date_iso }}{% if d.holiday_name %} · {{ d.holiday_name }}{% endif %}{% if d.es_futuro %} · FECHA FUTURA{% endif %}">{{ d.day }}{% if d.es_futuro %} ⚠{% endif %}</th>
           {% endfor %}
           <th class="mx-tot">Tot</th>
         </tr>
@@ -118,6 +118,8 @@
         <th>Tipo</th>
         <th class="num">Horas</th>
         <th>Codigo de hora (Sigrid)</th>
+        <th>Partida (imputacion)</th>
+        <th>Recurso / Parte</th>
         <th>Firma parte</th>
         {% if preview_enabled %}<th>Parte</th>{% endif %}
       </tr>
@@ -128,6 +130,8 @@
         <th><input class="col-filter" type="text" placeholder="Ordin./Extra…"></th>
         <th><input class="col-filter" type="text" placeholder="…"></th>
         <th><input class="col-filter" type="text" placeholder="Codigo…"></th>
+        <th><input class="col-filter" type="text" placeholder="Partida…"></th>
+        <th><input class="col-filter" type="text" placeholder="Recurso…"></th>
         <th><button type="button" class="filter-clear">Limpiar</button></th>
         {% if preview_enabled %}<th></th>{% endif %}
       </tr>
@@ -140,6 +144,7 @@
                  data-document-id="{{ r.document_id }}"
                  value="{{ r.fecha or '' }}">
           <a class="row-detail" href="/partes/{{ r.document_id }}" title="Abrir detalle del parte">↗</a>
+          {% if r.es_futuro %}<span class="warn-future" title="Fecha futura: posterior al mes en curso">⚠</span>{% endif %}
         </td>
         <td class="cell-trabajador">
           {% if sigrid_enabled %}
@@ -174,6 +179,24 @@
             {% if r.hora_codigo %}{{ r.hora_codigo }} · {{ r.hora_descripcion or '' }}{% else %}—{% endif %}
             {% if r.hora_match_method in ['categoria_normal', 'categoria_extra', 'categoria_extra_a_normal', 'extra_por_categoria', 'incidencia', 'incidencia_desc', 'ext_default', 'ext_first'] %}<span class="tag-auto" title="Asignado por matcheo determinista ({{ r.hora_match_method }})">auto</span>{% elif r.hora_match_method == 'codigo_propuesto' %}<span class="tag-ia" title="Propuesto por la IA - conviene revisar">IA</span>{% elif r.hora_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
           </div>
+        </td>
+        <td class="cell-partida">
+          {% if r.partida_cod %}
+            <span class="badge cap-{{ (r.partida_capitulo or 'CI')|lower }}">{{ r.partida_capitulo or 'CI' }}</span>
+            <span class="partida-cod">{{ r.partida_cod }}</span>
+            <div class="cell-sub">{{ r.partida_res or '' }}
+              {% if r.partida_match_method == 'auto_nombre' %}<span class="tag-auto" title="Casado por el nombre del recurso">nombre</span>
+              {% elif r.partida_match_method == 'auto_categoria' %}<span class="tag-auto" title="Casado por la categoria">auto</span>
+              {% elif r.partida_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
+            </div>
+          {% else %}<span class="muted">— sin partida —</span>{% endif %}
+        </td>
+        <td class="cell-recurso">
+          {% if r.parte_estado == 'ok' %}<span class="badge ok" title="Existe parte de trabajo (hmo {{ r.hmo_ide }})">Parte ✓</span>
+          {% elif r.parte_estado == 'sin_parte' %}<span class="badge warn" title="El recurso no tiene parte de trabajo de ese mes/obra">Sin parte</span>
+          {% elif r.parte_estado == 'sin_recurso' %}<span class="badge muted-badge" title="No se localizo el recurso en Sigrid">Sin recurso</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+          {% if r.recurso_cif %}<div class="cell-sub">DNI {{ r.recurso_cif }}{% if r.recurso_ide %} · rec {{ r.recurso_ide }}{% endif %}</div>{% endif %}
         </td>
         <td>
           {% if r.parte_firmado %}
