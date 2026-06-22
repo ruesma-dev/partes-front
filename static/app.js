@@ -379,24 +379,24 @@
     var tbody = table.querySelector("tbody");
     if (!headRow || !tbody) return;
     var ths = Array.prototype.slice.call(headRow.children);
-    var state = { col: -1, dir: 1 };
-    ths.forEach(function (th, idx) {
+    var state = { th: null, dir: 1 };
+    ths.forEach(function (th) {
       if (!th.textContent.trim() || th.classList.contains("no-sort")) return;
       th.classList.add("sortable-th");
       var arrow = document.createElement("span");
       arrow.className = "sort-arrow";
       th.appendChild(arrow);
       th.addEventListener("click", function () {
-        if (state.col === idx) state.dir = -state.dir;
-        else { state.col = idx; state.dir = 1; }
-        ths.forEach(function (t) {
+        if (state.th === th) state.dir = -state.dir;
+        else { state.th = th; state.dir = 1; }
+        Array.prototype.forEach.call(headRow.children, function (t) {
           t.classList.remove("sorted");
           var a = t.querySelector(".sort-arrow");
           if (a) a.textContent = "";
         });
         th.classList.add("sorted");
         arrow.textContent = state.dir > 0 ? " ▲" : " ▼";
-        _sortRows(tbody, idx, state.dir);
+        _sortRows(tbody, th.cellIndex, state.dir);  // cellIndex VIVO
       });
     });
   }
@@ -1264,6 +1264,198 @@
     });
   }
 
+  // ---------------------------------------------------------------- //
+  // Mover columnas (arrastrar cabecera) + redimensionar (arrastrar el
+  // borde derecho). Funciona en cualquier tabla; persiste orden y anchos
+  // por tabla en localStorage. Usa table-layout:fixed para que el ancho
+  // sea fiable y, al ensanchar, la tabla crezca y aparezca scroll.
+  // ---------------------------------------------------------------- //
+  function _ctKey(table) {
+    if (table.dataset.ctkey) return table.dataset.ctkey;
+    var hr = table.querySelector("thead tr:first-child");
+    var heads = hr
+      ? Array.prototype.map.call(hr.children, function (th) {
+          return (th.getAttribute("data-col-key") || th.textContent || "").trim();
+        }).join("|")
+      : "";
+    var base = table.id || heads;
+    var k = "ct:" + location.pathname.replace(/\/+$/, "") + ":" + base.slice(0, 140);
+    table.dataset.ctkey = k;
+    return k;
+  }
+  function _ctLoad(table) {
+    try { return JSON.parse(localStorage.getItem(_ctKey(table)) || "{}") || {}; }
+    catch (e) { return {}; }
+  }
+  function _ctSave(table, st) {
+    try { localStorage.setItem(_ctKey(table), JSON.stringify(st)); } catch (e) {}
+  }
+
+  function wireColumnTools(table) {
+    var headRow = table.querySelector("thead tr:first-child");
+    var tbody = table.querySelector("tbody");
+    if (!headRow || !tbody) return;
+    var filterRow = table.querySelector("thead tr.filter-row");
+
+    // 1) Clave estable por columna (texto limpio, ANTES de flechas/handles).
+    Array.prototype.forEach.call(headRow.children, function (th, i) {
+      if (!th.getAttribute("data-col-key")) {
+        th.setAttribute("data-col-key", (th.textContent || "").trim() || ("col" + i));
+      }
+    });
+
+    function moveInRow(row, from, to) {
+      var cells = row.children;
+      if (from >= cells.length || to >= cells.length || from === to) return;
+      var cell = cells[from];
+      if (to > from) row.insertBefore(cell, cells[to].nextSibling);
+      else row.insertBefore(cell, cells[to]);
+    }
+    function moveColumn(from, to) {
+      if (from === to) return;
+      moveInRow(headRow, from, to);
+      if (filterRow) moveInRow(filterRow, from, to);
+      Array.prototype.forEach.call(tbody.rows, function (r) { moveInRow(r, from, to); });
+    }
+    function applyOrder(order) {
+      order.forEach(function (key, target) {
+        var curr = Array.prototype.slice.call(headRow.children);
+        var from = curr.findIndex(function (th) {
+          return th.getAttribute("data-col-key") === key;
+        });
+        if (from >= 0 && from !== target) moveColumn(from, target);
+      });
+    }
+
+    var saved = _ctLoad(table);
+
+    // 2) Orden guardado.
+    if (saved.order && saved.order.length) applyOrder(saved.order);
+
+    // 3) Anchos: fijar ancho de cada cabecera (guardado o el actual) y pasar
+    //    la tabla a table-layout:fixed para que el ancho mande.
+    var savedW = saved.widths || {};
+    Array.prototype.forEach.call(headRow.children, function (th) {
+      var key = th.getAttribute("data-col-key");
+      var w = savedW[key] || th.offsetWidth || 80;
+      th.style.width = w + "px";
+    });
+    table.style.tableLayout = "fixed";
+    table.style.minWidth = "100%";
+    function syncTableWidth() {
+      var total = 0;
+      Array.prototype.forEach.call(headRow.children, function (th) {
+        total += parseInt(th.style.width, 10) || th.offsetWidth || 0;
+      });
+      table.style.width = total + "px";
+    }
+    syncTableWidth();
+
+    function curState() {
+      var order = Array.prototype.map.call(headRow.children, function (th) {
+        return th.getAttribute("data-col-key");
+      });
+      var widths = {};
+      Array.prototype.forEach.call(headRow.children, function (th) {
+        var w = parseInt(th.style.width, 10);
+        if (w) widths[th.getAttribute("data-col-key")] = w;
+      });
+      return { order: order, widths: widths };
+    }
+    function persist() { _ctSave(table, curState()); }
+
+    // 4) Manijas de REDIMENSIONADO (borde derecho de cada cabecera).
+    Array.prototype.forEach.call(headRow.children, function (th) {
+      th.classList.add("ct-th");
+      var handle = document.createElement("span");
+      handle.className = "col-resize";
+      handle.setAttribute("draggable", "false");
+      th.appendChild(handle);
+      var startX = 0, startW = 0;
+      handle.addEventListener("mousedown", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();           // no arranca reorder ni orden-por-clic
+        startX = ev.pageX;
+        startW = th.offsetWidth;
+        document.body.classList.add("col-resizing");
+        function mm(e) {
+          var w = Math.max(48, startW + (e.pageX - startX));
+          th.style.width = w + "px";
+          syncTableWidth();
+        }
+        function mu() {
+          document.removeEventListener("mousemove", mm);
+          document.removeEventListener("mouseup", mu);
+          document.body.classList.remove("col-resizing");
+          persist();
+        }
+        document.addEventListener("mousemove", mm);
+        document.addEventListener("mouseup", mu);
+      });
+      handle.addEventListener("click", function (ev) { ev.stopPropagation(); });
+      handle.addEventListener("dblclick", function (ev) {
+        ev.stopPropagation();           // doble clic: ancho automatico
+        th.style.width = "";
+        var max = 0;
+        var ci = th.cellIndex;
+        Array.prototype.forEach.call(tbody.rows, function (r) {
+          var c = r.cells[ci];
+          if (c) max = Math.max(max, c.scrollWidth);
+        });
+        th.style.width = Math.max(60, max + 22) + "px";
+        syncTableWidth();
+        persist();
+      });
+    });
+
+    // 5) REORDENAR con drag&drop nativo (no interfiere con el orden-por-clic:
+    //    un clic ordena, un arrastre mueve la columna).
+    var dragKey = null;
+    Array.prototype.forEach.call(headRow.children, function (th) {
+      th.setAttribute("draggable", "true");
+      th.addEventListener("dragstart", function (ev) {
+        dragKey = th.getAttribute("data-col-key");
+        if (ev.dataTransfer) {
+          ev.dataTransfer.effectAllowed = "move";
+          try { ev.dataTransfer.setData("text/plain", dragKey); } catch (e) {}
+        }
+        th.classList.add("col-dragging");
+      });
+      th.addEventListener("dragend", function () {
+        th.classList.remove("col-dragging");
+        Array.prototype.forEach.call(headRow.children, function (t) {
+          t.classList.remove("col-drop-target");
+        });
+        dragKey = null;
+      });
+      th.addEventListener("dragover", function (ev) {
+        if (dragKey == null) return;
+        ev.preventDefault();
+        if (ev.dataTransfer) ev.dataTransfer.dropEffect = "move";
+        if (th.getAttribute("data-col-key") !== dragKey) {
+          th.classList.add("col-drop-target");
+        }
+      });
+      th.addEventListener("dragleave", function () {
+        th.classList.remove("col-drop-target");
+      });
+      th.addEventListener("drop", function (ev) {
+        ev.preventDefault();
+        th.classList.remove("col-drop-target");
+        if (dragKey == null) return;
+        var kids = Array.prototype.slice.call(headRow.children);
+        var from = kids.findIndex(function (t) {
+          return t.getAttribute("data-col-key") === dragKey;
+        });
+        var to = kids.indexOf(th);
+        if (from >= 0 && to >= 0 && from !== to) {
+          moveColumn(from, to);
+          persist();
+        }
+      });
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Toggle del visor de PDF.
     var pdfBtn = document.getElementById("pdfToggle");
@@ -1286,6 +1478,7 @@
     document.querySelectorAll(".fecha-edit").forEach(wireFechaInput);
     document.querySelectorAll(".horas-edit").forEach(wireHorasInput);
     document.querySelectorAll(".combo-obra").forEach(wireObraCombo);
+    document.querySelectorAll("table.filterable:not(.matrix)").forEach(wireColumnTools);
     document.querySelectorAll("table").forEach(wireColumnFilters);
     document.querySelectorAll("table.filterable:not(.matrix)").forEach(wireSortable);
     document.querySelectorAll(".combo-emp").forEach(wireEmpleadoCombo);

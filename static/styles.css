@@ -657,6 +657,18 @@ body.modal-open { overflow: hidden; }
 .cal-hint{font-size:12px;margin-top:10px;}
 .table-scroll{overflow-x:auto;overflow-y:visible;}
 
+/* Mover/redimensionar columnas */
+.ct-th{position:relative;}
+.ct-th .col-resize{
+  position:absolute;top:0;right:0;width:8px;height:100%;
+  cursor:col-resize;user-select:none;z-index:3;
+}
+.ct-th .col-resize:hover{background:rgba(255,255,255,0.35);}
+body.col-resizing{cursor:col-resize !important;user-select:none !important;}
+.filterable thead tr:first-child th[draggable="true"]{cursor:pointer;}
+.col-dragging{opacity:0.45;}
+.col-drop-target{box-shadow:inset 3px 0 0 0 #ffd24a;}
+
 /* Modal añadir línea */
 .addline-backdrop{position:fixed;inset:0;background:rgba(20,22,28,.45);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;}
 .addline-backdrop[hidden]{display:none;}
