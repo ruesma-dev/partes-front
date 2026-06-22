@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Nuevo parte · {{ title }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Partes</span>
+    <h1>Nuevo parte</h1>
+    <p class="muted">Crea líneas de parte para un día o un periodo. Selecciona los días en el calendario.</p>
+  </div>
+  <a class="btn secondary" href="/partes">← Partes</a>
+</div>
+
+<div class="nuevo-grid" data-sigrid="{{ '1' if sigrid_enabled else '0' }}" data-hoy="{{ hoy }}">
+  <div class="panel nuevo-form">
+    <div class="field">
+      <label>Obra</label>
+      <div class="combo-simple" id="obra-combo">
+        <input type="text" id="obra-input" class="input" autocomplete="off"
+               placeholder="{{ 'Escribe código o nombre…' if sigrid_enabled else 'Sigrid no configurado' }}"
+               {% if not sigrid_enabled %}disabled{% endif %}>
+        <div class="combo-panel" id="obra-panel" hidden></div>
+      </div>
+      <input type="hidden" id="obra-ide"><input type="hidden" id="obra-codigo"><input type="hidden" id="obra-nombre">
+    </div>
+
+    <div class="field">
+      <label>Trabajador</label>
+      <div class="combo-simple" id="emp-combo">
+        <input type="text" id="emp-input" class="input" autocomplete="off"
+               placeholder="{{ 'Escribe nombre o DNI…' if sigrid_enabled else 'Sigrid no configurado' }}"
+               {% if not sigrid_enabled %}disabled{% endif %}>
+        <div class="combo-panel" id="emp-panel" hidden></div>
+      </div>
+      <input type="hidden" id="emp-ide"><input type="hidden" id="emp-codigo">
+      <input type="hidden" id="emp-nombre"><input type="hidden" id="emp-dni">
+    </div>
+
+    <div class="field">
+      <label>Categoría</label>
+      <input type="text" id="categoria" class="input" placeholder="Capataz, Oficial, Encargado…" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label>Partida (imputación)</label>
+      <div class="combo-simple" id="partida-combo">
+        <input type="text" id="partida-input" class="input" placeholder="Selecciona obra primero…" autocomplete="off" disabled>
+        <div class="combo-panel" id="partida-panel" hidden></div>
+      </div>
+      <input type="hidden" id="partida-ide"><input type="hidden" id="partida-cod">
+      <input type="hidden" id="partida-res"><input type="hidden" id="partida-capitulo">
+    </div>
+
+    <div class="field-row">
+      <div class="field">
+        <label>Horas ordinarias</label>
+        <input type="number" id="horas-ord" class="input" step="0.5" min="0" value="8">
+      </div>
+      <div class="field">
+        <label>Horas extra</label>
+        <input type="number" id="horas-extra" class="input" step="0.5" min="0" value="0">
+      </div>
+    </div>
+
+    <div class="nuevo-sel">
+      <span class="muted">Días seleccionados:</span>
+      <span id="dias-count" class="badge">0</span>
+    </div>
+    <div id="dias-chips" class="dias-chips"></div>
+
+    <button type="button" id="crear-btn" class="btn primary" disabled>Crear parte</button>
+    <p id="crear-status" class="form-status" hidden></p>
+  </div>
+
+  <div class="panel nuevo-cal">
+    <div class="cal-head">
+      <button type="button" class="btn secondary small" id="cal-prev">‹</button>
+      <strong id="cal-title"></strong>
+      <button type="button" class="btn secondary small" id="cal-next">›</button>
+    </div>
+    <div class="cal-modes">
+      <label><input type="radio" name="cal-mode" value="dias" checked> Días sueltos</label>
+      <label><input type="radio" name="cal-mode" value="rango"> Rango (clic inicio y fin)</label>
+      <button type="button" class="btn secondary small" id="cal-clear">Limpiar selección</button>
+    </div>
+    <div class="cal-grid" id="cal-grid"></div>
+    <p class="muted cal-hint">En modo rango, el primer clic marca el inicio y el segundo el fin; se seleccionan todos los días entre ambos.</p>
+  </div>
+</div>
+{% endblock %}

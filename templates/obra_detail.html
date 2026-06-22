@@ -7,7 +7,17 @@
     <h1>{% if detail.obra_codigo %}{{ detail.obra_codigo }} · {% endif %}{{ detail.obra_nombre or "(obra sin identificar)" }}</h1>
     <p class="muted">Horas por dia y trabajador del periodo seleccionado.</p>
   </div>
-  <a class="btn secondary" href="/obras">← Obras</a>
+  <div class="header-actions">
+    <button type="button" class="btn primary" data-add-line
+            data-obra-ide="{{ detail.obra_ide if detail.obra_ide is defined and detail.obra_ide is not none else '' }}"
+            data-obra-codigo="{{ detail.obra_codigo or '' }}"
+            data-obra-nombre="{{ detail.obra_nombre or '' }}"
+            data-obra-label="{% if detail.obra_codigo %}{{ detail.obra_codigo }} · {% endif %}{{ detail.obra_nombre or '' }}">+ Añadir línea</button>
+    <a class="btn secondary" href="/obras">← Obras</a>
+    <button type="button" class="btn danger" data-del-obra="{{ obra_key }}"
+            data-label="{% if detail.obra_codigo %}{{ detail.obra_codigo }} · {% endif %}{{ detail.obra_nombre or '' }}"
+            data-partes="{{ detail.num_partes if detail.num_partes is defined else '' }}">Borrar obra</button>
+  </div>
 </div>
 
 <div class="stat-grid">
@@ -109,6 +119,7 @@
 <div class="panel">
   <div class="panel-header"><h2>Lineas del periodo</h2></div>
   {% if detail.registros %}
+  <div class="table-scroll">
   <table class="table lines-table filterable" id="lines-table">
     <thead>
       <tr>
@@ -145,6 +156,7 @@
                  value="{{ r.fecha or '' }}">
           <a class="row-detail" href="/partes/{{ r.document_id }}" title="Abrir detalle del parte">↗</a>
           {% if r.es_futuro %}<span class="warn-future" title="Fecha futura: posterior al mes en curso">⚠</span>{% endif %}
+          <button type="button" class="line-del" title="Mover esta línea a la papelera">✕</button>
         </td>
         <td class="cell-trabajador">
           {% if sigrid_enabled %}
@@ -218,6 +230,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <div class="empty-state">No hay lineas en este periodo.</div>
   {% endif %}

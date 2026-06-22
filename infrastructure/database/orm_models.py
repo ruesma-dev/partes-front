@@ -158,6 +158,10 @@ class ParteRegistroOrm(Base):
 
     # --- Tipo de registro --- #
     tipo_hora: Mapped[str | None] = mapped_column(String(16))  # normal|extra|V|B|...
+
+    # --- Borrado (soft delete -> papelera). NULL = activo. --- #
+    deleted_at_utc: Mapped[str | None] = mapped_column(String(64), index=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(255))
     es_incidencia: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )

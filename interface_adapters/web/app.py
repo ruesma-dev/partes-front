@@ -19,6 +19,7 @@ from __future__ import annotations
 import html
 import logging
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
@@ -407,6 +408,7 @@ def build_app(settings: Settings) -> FastAPI:
             "sigrid_enabled": settings.sigrid_lookup_enabled,
             "preview_enabled": settings.preview_enabled,
             "back": f"/trabajadores/{worker_key}",
+            "worker_key": worker_key,
             "message": message,
         }
         return templates.TemplateResponse(
@@ -462,6 +464,7 @@ def build_app(settings: Settings) -> FastAPI:
             "sigrid_enabled": settings.sigrid_lookup_enabled,
             "preview_enabled": settings.preview_enabled,
             "back": f"/obras/{obra_key}",
+            "obra_key": obra_key,
             "message": message,
         }
         return templates.TemplateResponse(
@@ -834,6 +837,34 @@ def build_app(settings: Settings) -> FastAPI:
             ],
         })
 
+    @app.get("/api/sigrid/partidas", include_in_schema=False)
+    def sigrid_partidas(obra_ide: int = Query(...)) -> JSONResponse:
+        """Partidas HOJA (sin hijos) del presupuesto de la obra, para imputar.
+        Devuelve CD/CI/CP/OTRO sin restriccion (solo se exige que sean hoja)."""
+        if sigrid_client is None:
+            return JSONResponse(
+                {"ok": False, "error": "Sigrid no configurado en el sv4.",
+                 "items": []}
+            )
+        from application.services.partida_catalog import (
+            build_arbol_partidas,
+            partidas_hoja,
+        )
+        try:
+            filas = sigrid_client.fetch_partidas_obra(obra_ide)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[sigrid-lookup] partidas fallo: %r", exc)
+            return JSONResponse(
+                {"ok": False, "error": f"Error consultando Sigrid: {exc}",
+                 "items": []}
+            )
+        nodos = build_arbol_partidas(filas)
+        items = [
+            {"ide": n.ide, "cod": n.cod, "res": n.res, "capitulo": n.categoria}
+            for n in partidas_hoja(nodos)
+        ]
+        return JSONResponse({"ok": True, "items": items})
+
     # ---------------- Visor del PDF del parte ------------------------ #
     @app.get("/partes/{document_id}/preview", response_class=Response)
     def parte_preview(document_id: str) -> Response:
@@ -1043,6 +1074,164 @@ def build_app(settings: Settings) -> FastAPI:
         # Si borramos desde el detalle del propio parte, volver al listado.
         target = "/partes" if back.startswith(f"/partes/{document_id}") else back
         return _redirect(target, "Parte movido a la papelera")
+
+    # ----------------------------------------------------------- #
+    # BORRADO: linea / obra / persona  (soft -> papelera -> hard).
+    # ----------------------------------------------------------- #
+    @app.post("/api/registro/{registro_id}/delete", include_in_schema=False)
+    def api_registro_delete(registro_id: int) -> JSONResponse:
+        ok = repository.soft_delete_registro(
+            registro_id=registro_id, by=settings.default_reviewer
+        )
+        return JSONResponse({"ok": ok})
+
+    @app.post("/api/registro/{registro_id}/restore", include_in_schema=False)
+    def api_registro_restore(registro_id: int) -> JSONResponse:
+        return JSONResponse(
+            {"ok": repository.restore_registro(registro_id=registro_id)}
+        )
+
+    @app.post("/api/registro/{registro_id}/hard-delete", include_in_schema=False)
+    def api_registro_hard(registro_id: int) -> JSONResponse:
+        return JSONResponse(
+            {"ok": repository.hard_delete_registro(registro_id=registro_id)}
+        )
+
+    @app.post("/api/obra/{obra_key}/delete", include_in_schema=False)
+    def api_obra_delete(obra_key: str) -> JSONResponse:
+        n = repository.soft_delete_obra(
+            obra_key=obra_key, by=settings.default_reviewer
+        )
+        return JSONResponse({"ok": n > 0, "partes": n})
+
+    @app.post("/api/trabajador/{worker_key}/delete", include_in_schema=False)
+    def api_trabajador_delete(worker_key: str) -> JSONResponse:
+        n = repository.soft_delete_worker(
+            worker_key=worker_key, by=settings.default_reviewer
+        )
+        return JSONResponse({"ok": n > 0, "lineas": n})
+
+    @app.post("/api/documento/{document_id}/restore", include_in_schema=False)
+    def api_documento_restore(document_id: str) -> JSONResponse:
+        return JSONResponse(
+            {"ok": repository.restore_document(document_id=document_id)}
+        )
+
+    @app.post("/api/documento/{document_id}/hard-delete", include_in_schema=False)
+    def api_documento_hard(document_id: str) -> JSONResponse:
+        return JSONResponse(
+            {"ok": repository.hard_delete_document(document_id=document_id)}
+        )
+
+    @app.post("/api/papelera/vaciar", include_in_schema=False)
+    def api_papelera_vaciar() -> JSONResponse:
+        res = repository.vaciar_papelera()
+        return JSONResponse({"ok": True, **res})
+
+    @app.get("/papelera", response_class=HTMLResponse)
+    def papelera(
+        request: Request, message: str | None = Query(default=None)
+    ) -> HTMLResponse:
+        pap = repository.list_papelera()
+        context = {
+            "request": request,
+            "title": settings.app_title,
+            "documentos": pap["documentos"],
+            "registros": pap["registros"],
+            "message": message,
+        }
+        return templates.TemplateResponse(
+            request=request, name="papelera.html", context=context
+        )
+
+    # ----------------------------------------------------------- #
+    # CREAR parte manualmente (un dia o un periodo, con calendario).
+    # ----------------------------------------------------------- #
+    @app.get("/nuevo", response_class=HTMLResponse)
+    def nuevo_parte(request: Request) -> HTMLResponse:
+        context = {
+            "request": request,
+            "title": settings.app_title,
+            "sigrid_enabled": getattr(obra_catalog, "enabled", False),
+            "hoy": date.today().isoformat(),
+        }
+        return templates.TemplateResponse(
+            request=request, name="nuevo_parte.html", context=context
+        )
+
+    @app.post("/api/partes/nuevo", include_in_schema=False)
+    async def api_partes_nuevo(request: Request) -> JSONResponse:
+        try:
+            data = await request.json()
+        except Exception:  # noqa: BLE001
+            data = None
+        if not isinstance(data, dict):
+            return JSONResponse(
+                {"ok": False, "error": "Body no es JSON válido."}, status_code=400
+            )
+        dias = data.get("dias") or []
+        if not isinstance(dias, list) or not dias:
+            return JSONResponse(
+                {"ok": False, "error": "Selecciona al menos un día."},
+                status_code=400,
+            )
+        nombre = (data.get("empleado_nombre") or "").strip()
+        if not nombre:
+            return JSONResponse(
+                {"ok": False, "error": "Falta el trabajador."}, status_code=400
+            )
+        if data.get("obra_ide") is None and not (data.get("obra_codigo") or "").strip():
+            return JSONResponse(
+                {"ok": False, "error": "Falta la obra."}, status_code=400
+            )
+
+        def _f(v: Any) -> float:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return 0.0
+
+        # Casar el CODIGO DE HORA por categoria+tipo (igual que sv3 en la
+        # ingesta), para que las lineas manuales no salgan "sin asignar".
+        hora_normal = None
+        hora_extra = None
+        categoria_txt = (data.get("categoria") or "").strip()
+        if categoria_txt and sigrid_client is not None:
+            try:
+                from application.services.tipo_hora_matcher import (
+                    TipoHoraMatcher,
+                )
+                matcher = TipoHoraMatcher(sigrid_client.fetch_tipos_hora())
+                hora_normal = matcher.match(categoria_txt, extra=False)
+                hora_extra = matcher.match(categoria_txt, extra=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[partes-nuevo] match codigo hora fallo: %r", exc)
+
+        res = repository.crear_parte_manual(
+            obra_ide=_as_int(data.get("obra_ide")),
+            obra_codigo=(data.get("obra_codigo") or None),
+            obra_nombre=(data.get("obra_nombre") or None),
+            empleado_ide=_as_int(data.get("empleado_ide")),
+            empleado_codigo=(data.get("empleado_codigo") or None),
+            empleado_nombre=nombre,
+            empleado_dni=(data.get("empleado_dni") or None),
+            empleado_reside=_as_int(data.get("empleado_reside")),
+            categoria=(data.get("categoria") or None),
+            dias=[str(d) for d in dias],
+            horas_ordinaria=_f(data.get("horas_ordinaria")),
+            horas_extra=_f(data.get("horas_extra")),
+            partida_ide=_as_int(data.get("partida_ide")),
+            partida_cod=(data.get("partida_cod") or None),
+            partida_res=(data.get("partida_res") or None),
+            partida_capitulo=(data.get("partida_capitulo") or None),
+            hora_normal=hora_normal,
+            hora_extra=hora_extra,
+            by=settings.default_reviewer,
+        )
+        ok = not res.get("error") and (res.get("lineas") or 0) > 0
+        return JSONResponse(
+            {"ok": ok, **res}, status_code=200 if ok else 400
+        )
 
     return app
 

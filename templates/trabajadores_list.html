@@ -97,6 +97,8 @@
         </td>
         <td class="cell-actions">
           <a class="btn secondary small" href="/trabajadores/{{ w.worker_key }}">Ver</a>
+          <button type="button" class="btn danger small" data-del-worker="{{ w.worker_key }}"
+                  data-label="{{ w.nombre }}">Borrar</button>
         </td>
       </tr>
       {% endfor %}

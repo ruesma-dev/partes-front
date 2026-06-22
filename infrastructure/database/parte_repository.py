@@ -21,11 +21,12 @@ from __future__ import annotations
 import logging
 import json
 import unicodedata
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import selectinload
 
 from infrastructure.database.orm_models import (
@@ -429,6 +430,7 @@ class ParteReviewRepository:
                     "partida_match_score DOUBLE PRECISION",
                     "recurso_ide INTEGER", "recurso_cif VARCHAR(64)",
                     "hmo_ide INTEGER", "parte_estado VARCHAR(16)",
+                    "deleted_at_utc VARCHAR(64)", "deleted_by VARCHAR(255)",
                 ):
                     conn.execute(text(
                         "ALTER TABLE parte_registros ADD COLUMN IF NOT EXISTS "
@@ -474,6 +476,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .options(selectinload(ParteRegistroOrm.document))
             )
             if not include_deleted:
@@ -547,6 +550,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .options(selectinload(ParteRegistroOrm.document))
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
@@ -592,6 +596,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .options(selectinload(ParteRegistroOrm.document))
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
@@ -666,6 +671,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .options(selectinload(ParteRegistroOrm.document))
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
@@ -936,6 +942,8 @@ class ParteReviewRepository:
             for reg in sorted(
                 doc.registros, key=lambda r: (r.empleado_line_no or 0, r.line_index)
             ):
+                if reg.deleted_at_utc:
+                    continue  # linea en papelera
                 key = reg.empleado_ide or (reg.trabajador_nombre_leido or "") \
                     or reg.empleado_line_no
                 if key not in by_emp:
@@ -1022,6 +1030,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .where(ParteDocumentOrm.is_active.is_(True))
                 .where(ParteRegistroOrm.empleado_ide.is_(None))
             )
@@ -1094,6 +1103,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .where(ParteDocumentOrm.is_active.is_(True))
                 .where(ParteRegistroOrm.empleado_ide.is_(None))
             )
@@ -1277,6 +1287,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
             affected = [
@@ -1311,6 +1322,7 @@ class ParteReviewRepository:
             stmt = (
                 select(ParteRegistroOrm)
                 .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
             affected = [
@@ -1448,6 +1460,310 @@ class ParteReviewRepository:
             doc.deleted_by = deleted_by
             session.commit()
         return True
+
+    # ----------------------------------------------------------------- #
+    # BORRADO: linea / obra / persona.  soft (-> papelera) -> hard.
+    # ----------------------------------------------------------------- #
+    @staticmethod
+    def _obra_key_for_doc(doc: ParteDocumentOrm) -> str:
+        if doc.obra_ide is not None:
+            return f"obr-{doc.obra_ide}"
+        if doc.obra_codigo:
+            return "cod-" + _norm(doc.obra_codigo).replace(" ", "_")
+        nombre = _norm(doc.obra_nombre or doc.obra_nombre_leido)
+        if nombre:
+            return "nom-" + nombre.replace(" ", "_")
+        return "sin-obra"
+
+    # ---- LINEA (registro) ---- #
+    def soft_delete_registro(self, *, registro_id: int, by: str | None = None) -> bool:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._session_factory.create_session() as session:
+            reg = session.get(ParteRegistroOrm, registro_id)
+            if reg is None or reg.deleted_at_utc:
+                return False
+            reg.deleted_at_utc = now_iso
+            reg.deleted_by = by
+            session.commit()
+        return True
+
+    def restore_registro(self, *, registro_id: int) -> bool:
+        with self._session_factory.create_session() as session:
+            reg = session.get(ParteRegistroOrm, registro_id)
+            if reg is None:
+                return False
+            reg.deleted_at_utc = None
+            reg.deleted_by = None
+            # Si su documento estaba en papelera (p.ej. quedo vacio), recuperarlo.
+            doc = session.get(ParteDocumentOrm, reg.document_id)
+            if doc is not None and doc.deleted_at_utc and not doc.is_active:
+                doc.is_active = True
+                doc.deleted_at_utc = None
+                doc.deleted_by = None
+            session.commit()
+        return True
+
+    def hard_delete_registro(self, *, registro_id: int) -> bool:
+        with self._session_factory.create_session() as session:
+            reg = session.get(ParteRegistroOrm, registro_id)
+            if reg is None:
+                return False
+            session.delete(reg)
+            session.commit()
+        return True
+
+    # ---- OBRA (todos sus partes) ---- #
+    def soft_delete_obra(self, *, obra_key: str, by: str | None = None) -> int:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        n = 0
+        with self._session_factory.create_session() as session:
+            docs = session.execute(
+                select(ParteDocumentOrm).where(
+                    ParteDocumentOrm.is_active.is_(True)
+                )
+            ).scalars().all()
+            for doc in docs:
+                if self._obra_key_for_doc(doc) == obra_key:
+                    doc.is_active = False
+                    doc.deleted_at_utc = now_iso
+                    doc.deleted_by = by
+                    n += 1
+            session.commit()
+        return n
+
+    # ---- PERSONA (todas sus lineas) ---- #
+    def soft_delete_worker(self, *, worker_key: str, by: str | None = None) -> int:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        n = 0
+        with self._session_factory.create_session() as session:
+            rows = session.execute(
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteDocumentOrm.is_active.is_(True))
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
+            ).scalars().all()
+            docs_tocados: set[str] = set()
+            for reg in rows:
+                if worker_key_for_registro(reg) == worker_key:
+                    reg.deleted_at_utc = now_iso
+                    reg.deleted_by = by
+                    n += 1
+                    docs_tocados.add(reg.document_id)
+            # Documentos que quedan sin lineas activas -> a papelera tambien.
+            for did in docs_tocados:
+                queda = session.execute(
+                    select(ParteRegistroOrm.id)
+                    .where(ParteRegistroOrm.document_id == did)
+                    .where(ParteRegistroOrm.deleted_at_utc.is_(None))
+                    .limit(1)
+                ).first()
+                if queda is None:
+                    doc = session.get(ParteDocumentOrm, did)
+                    if doc is not None and doc.is_active:
+                        doc.is_active = False
+                        doc.deleted_at_utc = now_iso
+                        doc.deleted_by = by
+            session.commit()
+        return n
+
+    # ---- PAPELERA ---- #
+    def list_papelera(self) -> dict:
+        with self._session_factory.create_session() as session:
+            docs = session.execute(
+                select(ParteDocumentOrm)
+                .where(ParteDocumentOrm.deleted_at_utc.is_not(None))
+                .order_by(ParteDocumentOrm.deleted_at_utc.desc())
+            ).scalars().all()
+            documentos = [{
+                "document_id": d.id,
+                "fecha": d.fecha,
+                "obra_codigo": d.obra_codigo,
+                "obra_nombre": d.obra_nombre or d.obra_nombre_leido,
+                "num_lineas": len(d.registros),
+                "deleted_at_utc": d.deleted_at_utc,
+                "deleted_by": d.deleted_by,
+            } for d in docs]
+            # Lineas sueltas en papelera (su documento NO esta borrado).
+            regs = session.execute(
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_not(None))
+                .where(ParteDocumentOrm.deleted_at_utc.is_(None))
+                .order_by(ParteRegistroOrm.deleted_at_utc.desc())
+            ).scalars().all()
+            registros = [{
+                "registro_id": r.id,
+                "fecha": r.fecha,
+                "trabajador": r.empleado_nombre or r.trabajador_nombre_leido,
+                "categoria": r.categoria,
+                "obra_codigo": r.obra_codigo,
+                "obra_nombre": r.obra_nombre,
+                "tipo_hora": r.tipo_hora,
+                "horas": r.horas,
+                "deleted_at_utc": r.deleted_at_utc,
+                "deleted_by": r.deleted_by,
+            } for r in regs]
+        return {"documentos": documentos, "registros": registros}
+
+    def count_papelera(self) -> int:
+        p = self.list_papelera()
+        return len(p["documentos"]) + len(p["registros"])
+
+    def restore_document(self, *, document_id: str) -> bool:
+        with self._session_factory.create_session() as session:
+            doc = session.get(ParteDocumentOrm, document_id)
+            if doc is None:
+                return False
+            doc.is_active = True
+            doc.deleted_at_utc = None
+            doc.deleted_by = None
+            session.commit()
+        return True
+
+    def hard_delete_document(self, *, document_id: str) -> bool:
+        with self._session_factory.create_session() as session:
+            doc = session.get(ParteDocumentOrm, document_id)
+            if doc is None:
+                return False
+            session.execute(
+                delete(ParteRegistroOrm).where(
+                    ParteRegistroOrm.document_id == document_id
+                )
+            )
+            session.delete(doc)
+            session.commit()
+        return True
+
+    def vaciar_papelera(self) -> dict:
+        """Hard-delete de TODO lo que esta en papelera (documentos + sus
+        registros, y lineas sueltas borradas)."""
+        docs_borrados = 0
+        regs_borrados = 0
+        with self._session_factory.create_session() as session:
+            docs = session.execute(
+                select(ParteDocumentOrm).where(
+                    ParteDocumentOrm.deleted_at_utc.is_not(None)
+                )
+            ).scalars().all()
+            for d in docs:
+                session.execute(
+                    delete(ParteRegistroOrm).where(
+                        ParteRegistroOrm.document_id == d.id
+                    )
+                )
+                session.delete(d)
+                docs_borrados += 1
+            # Lineas sueltas borradas cuyo doc no esta en papelera.
+            regs = session.execute(
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.deleted_at_utc.is_not(None))
+                .where(ParteDocumentOrm.deleted_at_utc.is_(None))
+            ).scalars().all()
+            for r in regs:
+                session.delete(r)
+                regs_borrados += 1
+            session.commit()
+        return {"documentos": docs_borrados, "registros": regs_borrados}
+
+    # ----------------------------------------------------------------- #
+    # CREAR parte manualmente (un dia o un periodo).
+    # ----------------------------------------------------------------- #
+    def crear_parte_manual(
+        self, *,
+        obra_ide: int | None, obra_codigo: str | None, obra_nombre: str | None,
+        empleado_ide: int | None, empleado_codigo: str | None,
+        empleado_nombre: str | None, empleado_dni: str | None,
+        empleado_reside: int | None, categoria: str | None,
+        dias: list[str], horas_ordinaria: float, horas_extra: float,
+        partida_ide: int | None = None, partida_cod: str | None = None,
+        partida_res: str | None = None, partida_capitulo: str | None = None,
+        hora_normal=None, hora_extra=None,
+        by: str | None = None,
+    ) -> dict:
+        """Crea lineas de parte para una lista de dias (ISO). Por cada dia
+        busca (o crea) el documento activo de ese dia+obra y le añade una
+        linea ORDINARIA (horas_ordinaria) y/o EXTRA (horas_extra). El codigo
+        de hora / partida / recurso quedan pendientes de conciliacion (sv3)."""
+        now_iso = datetime.now(timezone.utc).isoformat()
+        docs_creados = 0
+        lineas = 0
+        tipos: list[tuple[str, float]] = []
+        if horas_ordinaria and float(horas_ordinaria) > 0:
+            tipos.append(("normal", float(horas_ordinaria)))
+        if horas_extra and float(horas_extra) > 0:
+            tipos.append(("extra", float(horas_extra)))
+        if not tipos:
+            return {"documentos": 0, "lineas": 0, "error": "Sin horas que crear."}
+
+        with self._session_factory.create_session() as session:
+            for iso in dias:
+                iso = (iso or "").strip()
+                digits = iso.replace("-", "")
+                if len(digits) != 8 or not digits.isdigit():
+                    continue
+                fint = int(digits)
+                stmt = (
+                    select(ParteDocumentOrm)
+                    .where(ParteDocumentOrm.is_active.is_(True))
+                    .where(ParteDocumentOrm.fecha_int == fint)
+                )
+                if obra_ide is not None:
+                    stmt = stmt.where(ParteDocumentOrm.obra_ide == obra_ide)
+                elif obra_codigo:
+                    stmt = stmt.where(ParteDocumentOrm.obra_codigo == obra_codigo)
+                doc = session.execute(stmt).scalars().first()
+                if doc is None:
+                    doc = ParteDocumentOrm(
+                        id=str(uuid.uuid4()),
+                        source_filename="(manual)",
+                        source_mime_type="manual",
+                        source_sha256="manual-" + uuid.uuid4().hex,
+                        created_at_utc=now_iso,
+                        fecha=iso, fecha_int=fint,
+                        obra_ide=obra_ide, obra_codigo=obra_codigo,
+                        obra_nombre=obra_nombre,
+                        is_active=True,
+                    )
+                    session.add(doc)
+                    session.flush()
+                    docs_creados += 1
+
+                maxli = session.execute(
+                    select(func.max(ParteRegistroOrm.line_index)).where(
+                        ParteRegistroOrm.document_id == doc.id
+                    )
+                ).scalar()
+                nli = (maxli if maxli is not None else -1) + 1
+                for tipo, horas in tipos:
+                    hm = hora_extra if tipo == "extra" else hora_normal
+                    session.add(ParteRegistroOrm(
+                        document_id=doc.id, line_index=nli, empleado_line_no=1,
+                        categoria=categoria,
+                        trabajador_nombre_leido=empleado_nombre,
+                        empleado_ide=empleado_ide, empleado_codigo=empleado_codigo,
+                        empleado_nombre=empleado_nombre, empleado_dni=empleado_dni,
+                        empleado_reside=empleado_reside,
+                        fecha=iso, fecha_int=fint,
+                        obra_codigo=obra_codigo, obra_nombre=obra_nombre,
+                        obra_ide=obra_ide,
+                        tipo_hora=tipo, horas=horas, es_incidencia=False,
+                        hora_ide=(hm.ide if hm else None),
+                        hora_codigo=(hm.codigo if hm else None),
+                        hora_descripcion=(hm.descripcion if hm else None),
+                        hora_ext=(hm.ext if hm else None),
+                        hora_precio_coste=(hm.pre if hm else None),
+                        hora_precio_nomina=(hm.prenom if hm else None),
+                        hora_match_method=(hm.method if hm else None),
+                        partida_ide=partida_ide, partida_cod=partida_cod,
+                        partida_res=partida_res, partida_capitulo=partida_capitulo,
+                        partida_match_method=("manual" if partida_ide else None),
+                        partida_match_score=(1.0 if partida_ide else None),
+                    ))
+                    nli += 1
+                    lineas += 1
+            session.commit()
+        return {"documentos": docs_creados, "lineas": lineas}
 
 
 def _registro_view(reg: ParteRegistroOrm) -> RegistroView:

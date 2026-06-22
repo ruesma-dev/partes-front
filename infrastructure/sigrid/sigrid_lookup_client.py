@@ -61,6 +61,23 @@ JOIN con ON emp.ide = con.ide
 """
 
 
+_SQL_PARTIDAS = """\
+SELECT
+    obrparpar.ide       AS ide,
+    obrparpar.padide    AS padide,
+    obrparpar.cod       AS cod,
+    obrparpar.res       AS res,
+    obrparpar.tex       AS tex,
+    obrparpar.tipdes    AS tipdes,
+    obrparpar.cosindide AS cosindide,
+    obrparpar.unimed    AS unimed
+FROM obrparpar
+WHERE obrparpar.obride = ?
+"""
+
+
+
+
 @dataclass(frozen=True)
 class TipoHoraOption:
     ide: int
@@ -84,6 +101,19 @@ class EmpleadoOption:
     codigo: str | None
     nombre: str | None
     dni: str | None
+
+
+@dataclass
+class PartidaRowLite:
+    """Fila cruda de ``obrparpar`` para construir el arbol de partidas."""
+    ide: int
+    padide: int | None
+    cod: str | None
+    res: str | None
+    tex: str | None
+    tipdes: int
+    cosindide: int | None
+    unimed: str | None
 
 
 class SigridLookupClient:
@@ -176,6 +206,31 @@ class SigridLookupClient:
                 )
             )
         logger.info("%s empleados -> %s filas", _LOG_PREFIX, len(out))
+        return out
+
+    def fetch_partidas_obra(self, obra_ide: int) -> list[PartidaRowLite]:
+        columns, rows = self._post_sql_read(
+            sql=_SQL_PARTIDAS, parameters=[int(obra_ide)], label="partidas",
+        )
+        out: list[PartidaRowLite] = []
+        for row in rows:
+            rm = dict(zip(columns, row))
+            ide = _opt_int(rm.get("ide"))
+            if ide is None:
+                continue
+            out.append(PartidaRowLite(
+                ide=ide,
+                padide=_opt_int(rm.get("padide")),
+                cod=_opt_str(rm.get("cod")),
+                res=_opt_str(rm.get("res")),
+                tex=_opt_str(rm.get("tex")),
+                tipdes=_opt_int(rm.get("tipdes")) or 0,
+                cosindide=_opt_int(rm.get("cosindide")),
+                unimed=_opt_str(rm.get("unimed")),
+            ))
+        logger.info(
+            "%s partidas obra=%s -> %s filas", _LOG_PREFIX, obra_ide, len(out)
+        )
         return out
 
     def _post_sql_read(

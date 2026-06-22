@@ -758,6 +758,512 @@
     refreshUndo();
   }
 
+  function _postJSON(url) {
+    return fetch(url, { method: "POST", headers: { Accept: "application/json" } })
+      .then(function (r) {
+        return r.json().catch(function () { return { ok: r.ok }; });
+      })
+      .catch(function () { return { ok: false }; });
+  }
+
+  function _bindClick(sel, handler) {
+    document.querySelectorAll(sel).forEach(function (btn) {
+      btn.addEventListener("click", function () { handler(btn); });
+    });
+  }
+
+  function wireBorrado() {
+    // Borrar LINEA (✕ en filas) -> soft delete -> papelera.
+    _bindClick(".line-del", function (btn) {
+      var row = btn.closest("[data-registro-id]");
+      if (!row) return;
+      var id = row.getAttribute("data-registro-id");
+      if (!confirm("¿Mover esta línea a la papelera?")) return;
+      btn.disabled = true;
+      _postJSON("/api/registro/" + id + "/delete").then(function (d) {
+        if (d && d.ok) { window.location.reload(); }
+        else { btn.disabled = false; alert("No se pudo borrar la línea."); }
+      });
+    });
+    // Borrar OBRA completa (todos sus partes).
+    _bindClick("[data-del-obra]", function (btn) {
+      var key = btn.getAttribute("data-del-obra");
+      var label = btn.getAttribute("data-label") || "esta obra";
+      var partes = btn.getAttribute("data-partes");
+      var msg = "¿Mover a la papelera TODOS los partes de «" + label + "»"
+        + (partes ? " (" + partes + " partes)" : "") + "?";
+      if (!confirm(msg)) return;
+      btn.disabled = true;
+      _postJSON("/api/obra/" + encodeURIComponent(key) + "/delete").then(function (d) {
+        if (d && d.ok) { window.location.href = "/obras"; }
+        else { btn.disabled = false; alert("No se pudo borrar la obra."); }
+      });
+    });
+    // Borrar PERSONA completa (todas sus líneas).
+    _bindClick("[data-del-worker]", function (btn) {
+      var key = btn.getAttribute("data-del-worker");
+      var label = btn.getAttribute("data-label") || "esta persona";
+      if (!confirm("¿Mover a la papelera TODAS las líneas de «" + label + "»?")) return;
+      btn.disabled = true;
+      _postJSON("/api/trabajador/" + encodeURIComponent(key) + "/delete").then(function (d) {
+        if (d && d.ok) { window.location.href = "/trabajadores"; }
+        else { btn.disabled = false; alert("No se pudo borrar la persona."); }
+      });
+    });
+    // PAPELERA: restaurar / eliminar (documento y línea) + vaciar.
+    _bindClick("[data-restore-doc]", function (btn) {
+      btn.disabled = true;
+      _postJSON("/api/documento/" + btn.getAttribute("data-restore-doc") + "/restore")
+        .then(function (d) { if (d && d.ok) window.location.reload(); else btn.disabled = false; });
+    });
+    _bindClick("[data-hard-doc]", function (btn) {
+      var label = btn.getAttribute("data-label") || "este parte";
+      if (!confirm("Eliminar DEFINITIVAMENTE " + label + "?\nNo se puede deshacer.")) return;
+      btn.disabled = true;
+      _postJSON("/api/documento/" + btn.getAttribute("data-hard-doc") + "/hard-delete")
+        .then(function (d) { if (d && d.ok) window.location.reload(); else btn.disabled = false; });
+    });
+    _bindClick("[data-restore-line]", function (btn) {
+      btn.disabled = true;
+      _postJSON("/api/registro/" + btn.getAttribute("data-restore-line") + "/restore")
+        .then(function (d) { if (d && d.ok) window.location.reload(); else btn.disabled = false; });
+    });
+    _bindClick("[data-hard-line]", function (btn) {
+      var label = btn.getAttribute("data-label") || "esta línea";
+      if (!confirm("Eliminar DEFINITIVAMENTE " + label + "?\nNo se puede deshacer.")) return;
+      btn.disabled = true;
+      _postJSON("/api/registro/" + btn.getAttribute("data-hard-line") + "/hard-delete")
+        .then(function (d) { if (d && d.ok) window.location.reload(); else btn.disabled = false; });
+    });
+    var vaciar = document.getElementById("papelera-vaciar");
+    if (vaciar) {
+      vaciar.addEventListener("click", function () {
+        if (!confirm("Vaciar la papelera?\nSe eliminará DEFINITIVAMENTE todo su contenido. No se puede deshacer.")) return;
+        vaciar.disabled = true;
+        _postJSON("/api/papelera/vaciar")
+          .then(function (d) { if (d && d.ok) window.location.reload(); else vaciar.disabled = false; });
+      });
+    }
+  }
+
+  // ----- Crear parte (calendario + combos) ----- //
+  function _comboSimple(rootId, inputId, panelId, url, render, onPick) {
+    var input = document.getElementById(inputId);
+    var panel = document.getElementById(panelId);
+    if (!input || !panel) return;
+    var cache = null;
+    function load() {
+      if (cache) return Promise.resolve(cache);
+      return fetch(url, { headers: { Accept: "application/json" } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { cache = (d && d.items) || []; return cache; })
+        .catch(function () { cache = []; return cache; });
+    }
+    function norm(s) { return (s || "").toString().toLowerCase(); }
+    function show(items) {
+      panel.innerHTML = "";
+      if (!items.length) { panel.hidden = true; return; }
+      items.slice(0, 15).forEach(function (it) {
+        var row = document.createElement("div");
+        row.className = "combo-option";
+        row.textContent = render(it);
+        row.addEventListener("mousedown", function (ev) {
+          ev.preventDefault();
+          onPick(it);
+          input.value = render(it);
+          panel.hidden = true;
+        });
+        panel.appendChild(row);
+      });
+      panel.hidden = false;
+    }
+    input.addEventListener("input", function () {
+      var q = norm(input.value);
+      if (q.length < 1) { panel.hidden = true; return; }
+      load().then(function (items) {
+        show(items.filter(function (it) {
+          return norm(render(it)).indexOf(q) !== -1
+            || norm(it.dni).indexOf(q) !== -1
+            || norm(it.codigo).indexOf(q) !== -1;
+        }));
+      });
+    });
+    input.addEventListener("focus", function () {
+      if (input.value) input.dispatchEvent(new Event("input"));
+    });
+    document.addEventListener("click", function (ev) {
+      if (!panel.hidden && !document.getElementById(rootId).contains(ev.target)) {
+        panel.hidden = true;
+      }
+    });
+  }
+
+  function _partidaCombo(prefix, getObraIde) {
+    var input = document.getElementById(prefix + "-input");
+    var panel = document.getElementById(prefix + "-panel");
+    var rootSel = prefix + "-combo";
+    if (!input || !panel) return { reload: function () {}, clear: function () {} };
+    var items = [];
+    function setHidden(p) {
+      document.getElementById(prefix + "-ide").value = p && p.ide != null ? p.ide : "";
+      document.getElementById(prefix + "-cod").value = p ? (p.cod || "") : "";
+      document.getElementById(prefix + "-res").value = p ? (p.res || "") : "";
+      document.getElementById(prefix + "-capitulo").value = p ? (p.capitulo || "") : "";
+    }
+    function label(p) {
+      return "[" + (p.capitulo || "?") + "] " + (p.cod ? p.cod + " · " : "") + (p.res || "");
+    }
+    function show(list) {
+      panel.innerHTML = "";
+      if (!list.length) { panel.hidden = true; return; }
+      list.slice(0, 40).forEach(function (p) {
+        var row = document.createElement("div");
+        row.className = "combo-option";
+        row.textContent = label(p);
+        row.addEventListener("mousedown", function (ev) {
+          ev.preventDefault(); setHidden(p); input.value = label(p); panel.hidden = true;
+        });
+        panel.appendChild(row);
+      });
+      panel.hidden = false;
+    }
+    input.addEventListener("input", function () {
+      var q = input.value.toLowerCase();
+      show(items.filter(function (p) { return label(p).toLowerCase().indexOf(q) !== -1; }));
+    });
+    input.addEventListener("focus", function () { if (!input.disabled) show(items); });
+    document.addEventListener("click", function (ev) {
+      var root = document.getElementById(rootSel);
+      if (!panel.hidden && root && !root.contains(ev.target)) panel.hidden = true;
+    });
+    function clear() { setHidden(null); input.value = ""; }
+    function reload() {
+      clear();
+      var obra = getObraIde();
+      if (!obra) {
+        items = []; input.disabled = true;
+        input.placeholder = "Selecciona obra primero…";
+        return;
+      }
+      input.disabled = true; input.placeholder = "Cargando partidas…";
+      fetch("/api/sigrid/partidas?obra_ide=" + encodeURIComponent(obra),
+        { headers: { Accept: "application/json" } })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          items = (d && d.items) || [];
+          input.disabled = false;
+          input.placeholder = items.length
+            ? ("Buscar partida… (" + items.length + ")")
+            : "Esta obra no tiene partidas";
+        })
+        .catch(function () {
+          items = []; input.disabled = false; input.placeholder = "Error al cargar partidas";
+        });
+    }
+    return { reload: reload, clear: clear };
+  }
+
+  function wireNuevoParte() {
+    var grid = document.getElementById("cal-grid");
+    if (!grid) return;
+    var root = document.querySelector(".nuevo-grid");
+    var selected = {};            // iso -> true
+    var rangeStart = null;
+    var cur = new Date(root.getAttribute("data-hoy") + "T00:00:00");
+    var y = cur.getFullYear(), m = cur.getMonth();
+    var MESES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio",
+      "Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+    var DOW = ["L","M","X","J","V","S","D"];
+
+    function iso(yy, mm, dd) {
+      return yy + "-" + ("0" + (mm + 1)).slice(-2) + "-" + ("0" + dd).slice(-2);
+    }
+    function countSel() { return Object.keys(selected).length; }
+
+    function renderChips() {
+      var box = document.getElementById("dias-chips");
+      var keys = Object.keys(selected).sort();
+      document.getElementById("dias-count").textContent = keys.length;
+      box.innerHTML = "";
+      keys.forEach(function (k) {
+        var c = document.createElement("span");
+        c.className = "dia-chip";
+        c.textContent = k.slice(8) + "/" + k.slice(5, 7);
+        var x = document.createElement("button");
+        x.type = "button"; x.textContent = "×"; x.title = "Quitar día";
+        x.addEventListener("click", function () { delete selected[k]; renderCal(); });
+        c.appendChild(x); box.appendChild(c);
+      });
+      updateBtn();
+    }
+    function updateBtn() {
+      var obraOk = !!(document.getElementById("obra-ide").value
+        || document.getElementById("obra-codigo").value);
+      var empOk = !!document.getElementById("emp-nombre").value;
+      document.getElementById("crear-btn").disabled =
+        !(countSel() > 0 && obraOk && empOk);
+    }
+    function clickDay(isoStr) {
+      var mode = (document.querySelector("input[name=cal-mode]:checked") || {}).value;
+      if (mode === "rango") {
+        if (!rangeStart) { rangeStart = isoStr; selected[isoStr] = true; }
+        else {
+          var a = rangeStart < isoStr ? rangeStart : isoStr;
+          var b = rangeStart < isoStr ? isoStr : rangeStart;
+          var d = new Date(a + "T00:00:00"), end = new Date(b + "T00:00:00");
+          while (d <= end) {
+            selected[iso(d.getFullYear(), d.getMonth(), d.getDate())] = true;
+            d.setDate(d.getDate() + 1);
+          }
+          rangeStart = null;
+        }
+      } else {
+        if (selected[isoStr]) delete selected[isoStr]; else selected[isoStr] = true;
+      }
+      renderCal();
+    }
+    function renderCal() {
+      document.getElementById("cal-title").textContent = MESES[m] + " " + y;
+      grid.innerHTML = "";
+      DOW.forEach(function (d) {
+        var h = document.createElement("div"); h.className = "cal-dow"; h.textContent = d;
+        grid.appendChild(h);
+      });
+      var first = new Date(y, m, 1);
+      var lead = (first.getDay() + 6) % 7;   // lunes=0
+      for (var i = 0; i < lead; i++) {
+        grid.appendChild(document.createElement("div"));
+      }
+      var days = new Date(y, m + 1, 0).getDate();
+      for (var dd = 1; dd <= days; dd++) {
+        var isoStr = iso(y, m, dd);
+        var cell = document.createElement("button");
+        cell.type = "button"; cell.className = "cal-day"; cell.textContent = dd;
+        if (selected[isoStr]) cell.classList.add("sel");
+        if (rangeStart === isoStr) cell.classList.add("range-start");
+        (function (s) {
+          cell.addEventListener("click", function () { clickDay(s); });
+        })(isoStr);
+        grid.appendChild(cell);
+      }
+      renderChips();
+    }
+
+    document.getElementById("cal-prev").addEventListener("click", function () {
+      m--; if (m < 0) { m = 11; y--; } renderCal();
+    });
+    document.getElementById("cal-next").addEventListener("click", function () {
+      m++; if (m > 11) { m = 0; y++; } renderCal();
+    });
+    document.getElementById("cal-clear").addEventListener("click", function () {
+      selected = {}; rangeStart = null; renderCal();
+    });
+    document.querySelectorAll("input[name=cal-mode]").forEach(function (r) {
+      r.addEventListener("change", function () { rangeStart = null; renderCal(); });
+    });
+
+    var partidaC = _partidaCombo("partida", function () {
+      return document.getElementById("obra-ide").value;
+    });
+
+    _comboSimple("obra-combo", "obra-input", "obra-panel", "/api/sigrid/obras",
+      function (o) { return (o.codigo ? o.codigo + " · " : "") + (o.nombre || ""); },
+      function (o) {
+        document.getElementById("obra-ide").value = o.ide != null ? o.ide : "";
+        document.getElementById("obra-codigo").value = o.codigo || "";
+        document.getElementById("obra-nombre").value = o.nombre || "";
+        updateBtn();
+        partidaC.reload();
+      });
+    _comboSimple("emp-combo", "emp-input", "emp-panel", "/api/sigrid/empleados",
+      function (e) { return (e.nombre || "") + (e.dni ? " · " + e.dni : ""); },
+      function (e) {
+        document.getElementById("emp-ide").value = e.ide != null ? e.ide : "";
+        document.getElementById("emp-codigo").value = e.codigo || "";
+        document.getElementById("emp-nombre").value = e.nombre || "";
+        document.getElementById("emp-dni").value = e.dni || "";
+        updateBtn();
+      });
+
+    document.getElementById("crear-btn").addEventListener("click", function () {
+      var btn = this;
+      var dias = Object.keys(selected).sort();
+      var payload = {
+        obra_ide: document.getElementById("obra-ide").value || null,
+        obra_codigo: document.getElementById("obra-codigo").value || null,
+        obra_nombre: document.getElementById("obra-nombre").value || null,
+        empleado_ide: document.getElementById("emp-ide").value || null,
+        empleado_codigo: document.getElementById("emp-codigo").value || null,
+        empleado_nombre: document.getElementById("emp-nombre").value || null,
+        empleado_dni: document.getElementById("emp-dni").value || null,
+        categoria: document.getElementById("categoria").value || null,
+        dias: dias,
+        horas_ordinaria: document.getElementById("horas-ord").value || 0,
+        horas_extra: document.getElementById("horas-extra").value || 0,
+        partida_ide: document.getElementById("partida-ide").value || null,
+        partida_cod: document.getElementById("partida-cod").value || null,
+        partida_res: document.getElementById("partida-res").value || null,
+        partida_capitulo: document.getElementById("partida-capitulo").value || null
+      };
+      var st = document.getElementById("crear-status");
+      btn.disabled = true; st.hidden = false; st.className = "form-status";
+      st.textContent = "Creando…";
+      fetch("/api/partes/nuevo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (d && d.ok) {
+          st.className = "form-status ok";
+          st.textContent = "Creado: " + d.lineas + " línea(s) en " + dias.length + " día(s).";
+          var emp = document.getElementById("emp-ide").value;
+          setTimeout(function () {
+            window.location.href = emp ? ("/trabajadores/emp-" + emp) : "/partes";
+          }, 700);
+        } else {
+          st.className = "form-status error";
+          st.textContent = (d && d.error) || "No se pudo crear el parte.";
+          btn.disabled = false;
+        }
+      }).catch(function () {
+        st.className = "form-status error";
+        st.textContent = "Error de red al crear el parte.";
+        btn.disabled = false;
+      });
+    });
+
+    renderCal();
+  }
+
+  function wireAddLine() {
+    var modal = document.getElementById("addline-modal");
+    if (!modal) return;
+    var g = function (id) { return document.getElementById(id); };
+
+    function setLock(prefix, locked, label, vals) {
+      var lockEl = g("addline-" + prefix + "-locked");
+      var combo = g("addline-" + prefix + "-combo");
+      if (locked) {
+        lockEl.textContent = label || "";
+        lockEl.hidden = false;
+        combo.hidden = true;
+      } else {
+        lockEl.hidden = true;
+        combo.hidden = false;
+        g("addline-" + prefix + "-input").value = "";
+      }
+      g("addline-" + prefix + "-ide").value = (vals && vals.ide) || "";
+      g("addline-" + prefix + "-codigo").value = (vals && vals.codigo) || "";
+      g("addline-" + prefix + "-nombre").value = (vals && vals.nombre) || "";
+      if (prefix === "emp") g("addline-emp-dni").value = (vals && vals.dni) || "";
+    }
+
+    function todayISO() {
+      var d = new Date();
+      return d.getFullYear() + "-" + ("0" + (d.getMonth() + 1)).slice(-2)
+        + "-" + ("0" + d.getDate()).slice(-2);
+    }
+
+    var partidaC = _partidaCombo("addline-partida", function () {
+      return g("addline-obra-ide").value;
+    });
+
+    function open(btn) {
+      var d = btn.dataset;
+      var obraLocked = !!(d.obraCodigo || d.obraIde);
+      setLock("obra", obraLocked, d.obraLabel, obraLocked
+        ? { ide: d.obraIde, codigo: d.obraCodigo, nombre: d.obraNombre } : null);
+      var empLocked = !!d.empNombre;
+      setLock("emp", empLocked, d.empLabel, empLocked
+        ? { ide: d.empIde, codigo: d.empCodigo, nombre: d.empNombre, dni: d.empDni } : null);
+      g("addline-categoria").value = d.categoria || "";
+      g("addline-fecha").value = d.fecha || todayISO();
+      g("addline-ord").value = "8";
+      g("addline-extra").value = "0";
+      partidaC.reload();
+      var st = g("addline-status"); st.hidden = true; st.textContent = "";
+      g("addline-submit").disabled = false;
+      modal.hidden = false;
+      document.body.classList.add("modal-open");
+    }
+    function close() {
+      modal.hidden = true;
+      document.body.classList.remove("modal-open");
+    }
+
+    // Combos del modal (una sola vez).
+    _comboSimple("addline-obra-combo", "addline-obra-input", "addline-obra-panel",
+      "/api/sigrid/obras",
+      function (o) { return (o.codigo ? o.codigo + " · " : "") + (o.nombre || ""); },
+      function (o) {
+        g("addline-obra-ide").value = o.ide != null ? o.ide : "";
+        g("addline-obra-codigo").value = o.codigo || "";
+        g("addline-obra-nombre").value = o.nombre || "";
+        partidaC.reload();
+      });
+    _comboSimple("addline-emp-combo", "addline-emp-input", "addline-emp-panel",
+      "/api/sigrid/empleados",
+      function (e) { return (e.nombre || "") + (e.dni ? " · " + e.dni : ""); },
+      function (e) {
+        g("addline-emp-ide").value = e.ide != null ? e.ide : "";
+        g("addline-emp-codigo").value = e.codigo || "";
+        g("addline-emp-nombre").value = e.nombre || "";
+        g("addline-emp-dni").value = e.dni || "";
+      });
+    _bindClick("[data-add-line]", function (btn) { open(btn); });
+    g("addline-close").addEventListener("click", close);
+    g("addline-cancel").addEventListener("click", close);
+    modal.addEventListener("click", function (ev) { if (ev.target === modal) close(); });
+
+    g("addline-submit").addEventListener("click", function () {
+      var st = g("addline-status");
+      var fecha = g("addline-fecha").value;
+      var obra = g("addline-obra-codigo").value || g("addline-obra-ide").value;
+      var emp = g("addline-emp-nombre").value;
+      if (!obra) { st.hidden = false; st.className = "form-status error"; st.textContent = "Falta la obra."; return; }
+      if (!emp) { st.hidden = false; st.className = "form-status error"; st.textContent = "Falta el trabajador."; return; }
+      if (!fecha) { st.hidden = false; st.className = "form-status error"; st.textContent = "Falta la fecha."; return; }
+      var payload = {
+        obra_ide: g("addline-obra-ide").value || null,
+        obra_codigo: g("addline-obra-codigo").value || null,
+        obra_nombre: g("addline-obra-nombre").value || null,
+        empleado_ide: g("addline-emp-ide").value || null,
+        empleado_codigo: g("addline-emp-codigo").value || null,
+        empleado_nombre: g("addline-emp-nombre").value || null,
+        empleado_dni: g("addline-emp-dni").value || null,
+        categoria: g("addline-categoria").value || null,
+        dias: [fecha],
+        horas_ordinaria: g("addline-ord").value || 0,
+        horas_extra: g("addline-extra").value || 0,
+        partida_ide: g("addline-partida-ide").value || null,
+        partida_cod: g("addline-partida-cod").value || null,
+        partida_res: g("addline-partida-res").value || null,
+        partida_capitulo: g("addline-partida-capitulo").value || null
+      };
+      var btn = this; btn.disabled = true;
+      st.hidden = false; st.className = "form-status"; st.textContent = "Añadiendo…";
+      fetch("/api/partes/nuevo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(payload)
+      }).then(function (r) { return r.json(); }).then(function (res) {
+        if (res && res.ok) {
+          st.className = "form-status ok";
+          st.textContent = "Añadida: " + res.lineas + " línea(s).";
+          setTimeout(function () { window.location.reload(); }, 500);
+        } else {
+          st.className = "form-status error";
+          st.textContent = (res && res.error) || "No se pudo añadir.";
+          btn.disabled = false;
+        }
+      }).catch(function () {
+        st.className = "form-status error";
+        st.textContent = "Error de red.";
+        btn.disabled = false;
+      });
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Toggle del visor de PDF.
     var pdfBtn = document.getElementById("pdfToggle");
@@ -787,6 +1293,9 @@
     wirePdfModal();
     wireUndo();
     wireConciliacion();
+    wireBorrado();
+    wireNuevoParte();
+    wireAddLine();
 
     var combos = Array.prototype.slice.call(document.querySelectorAll(".combo-hora"));
     if (!combos.length) return;

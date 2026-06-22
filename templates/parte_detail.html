@@ -15,6 +15,12 @@
     {% if parte.sharepoint_url %}
     <a class="btn primary" href="{{ parte.sharepoint_url }}" target="_blank" rel="noopener">Abrir en SharePoint ↗</a>
     {% endif %}
+    <button type="button" class="btn primary" data-add-line
+            data-obra-ide="{{ parte.obra_ide if parte.obra_ide is not none else '' }}"
+            data-obra-codigo="{{ parte.obra_codigo or '' }}"
+            data-obra-nombre="{{ parte.obra_nombre or '' }}"
+            data-obra-label="{% if parte.obra_codigo %}{{ parte.obra_codigo }} · {% endif %}{{ parte.obra_nombre or '' }}"
+            data-fecha="{{ parte.fecha or '' }}">+ Añadir línea</button>
     <a class="btn secondary" href="/partes">← Partes</a>
   </div>
 </div>
@@ -125,6 +131,7 @@
           {% endif %}
         </div>
       </div>
+      <div class="table-scroll">
       <table class="table lines-table filterable">
         <thead>
           <tr>
@@ -146,6 +153,7 @@
               {% else %}
                 <span class="badge normal">Ordinaria</span>
               {% endif %}
+              <button type="button" class="line-del" title="Mover esta línea a la papelera">✕</button>
             </td>
             <td class="num cell-horas">
               <input type="number" step="0.5" min="0" class="horas-edit cell-edit cell-edit-num"
@@ -186,6 +194,7 @@
           {% endfor %}
         </tbody>
       </table>
+      </div>
     </div>
     {% endfor %}
   {% else %}

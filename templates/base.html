@@ -22,6 +22,8 @@
         <a href="/obras"{% if request.url.path.startswith('/obras') %} class="is-active"{% endif %}>Obras</a>
         <a href="/conciliacion"{% if request.url.path.startswith('/conciliacion') %} class="is-active"{% endif %}>Conciliar</a>
         <a href="/partes"{% if request.url.path.startswith('/partes') %} class="is-active"{% endif %}>Partes</a>
+        <a href="/papelera"{% if request.url.path.startswith('/papelera') %} class="is-active"{% endif %}>Papelera</a>
+        <a href="/nuevo"{% if request.url.path.startswith('/nuevo') %} class="is-active"{% endif %}>+ Nuevo</a>
       </nav>
     </div>
   </header>
@@ -64,7 +66,62 @@
     </div>
   </div>
 
+  <div id="addline-modal" class="addline-backdrop" hidden>
+    <div class="addline-card">
+      <div class="addline-head">
+        <strong>Añadir línea de parte</strong>
+        <button type="button" class="addline-x" id="addline-close" title="Cerrar">×</button>
+      </div>
+      <div class="addline-body">
+        <div class="field" id="addline-obra-field">
+          <label>Obra</label>
+          <div class="addline-locked" id="addline-obra-locked" hidden></div>
+          <div class="combo-simple" id="addline-obra-combo">
+            <input type="text" id="addline-obra-input" class="input" placeholder="Obra…" autocomplete="off">
+            <div class="combo-panel" id="addline-obra-panel" hidden></div>
+          </div>
+          <input type="hidden" id="addline-obra-ide"><input type="hidden" id="addline-obra-codigo"><input type="hidden" id="addline-obra-nombre">
+        </div>
+        <div class="field" id="addline-emp-field">
+          <label>Trabajador</label>
+          <div class="addline-locked" id="addline-emp-locked" hidden></div>
+          <div class="combo-simple" id="addline-emp-combo">
+            <input type="text" id="addline-emp-input" class="input" placeholder="Trabajador…" autocomplete="off">
+            <div class="combo-panel" id="addline-emp-panel" hidden></div>
+          </div>
+          <input type="hidden" id="addline-emp-ide"><input type="hidden" id="addline-emp-codigo">
+          <input type="hidden" id="addline-emp-nombre"><input type="hidden" id="addline-emp-dni">
+        </div>
+        <div class="field">
+          <label>Categoría</label>
+          <input type="text" id="addline-categoria" class="input" placeholder="Capataz, Oficial…" autocomplete="off">
+        </div>
+        <div class="field">
+          <label>Partida (imputación)</label>
+          <div class="combo-simple" id="addline-partida-combo">
+            <input type="text" id="addline-partida-input" class="input" placeholder="Selecciona obra…" autocomplete="off" disabled>
+            <div class="combo-panel" id="addline-partida-panel" hidden></div>
+          </div>
+          <input type="hidden" id="addline-partida-ide"><input type="hidden" id="addline-partida-cod">
+          <input type="hidden" id="addline-partida-res"><input type="hidden" id="addline-partida-capitulo">
+        </div>
+        <div class="field">
+          <label>Fecha</label>
+          <input type="date" id="addline-fecha" class="input">
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Ordinarias</label><input type="number" id="addline-ord" class="input" step="0.5" min="0" value="8"></div>
+          <div class="field"><label>Extra</label><input type="number" id="addline-extra" class="input" step="0.5" min="0" value="0"></div>
+        </div>
+        <p id="addline-status" class="form-status" hidden></p>
+      </div>
+      <div class="addline-foot">
+        <button type="button" class="btn secondary" id="addline-cancel">Cancelar</button>
+        <button type="button" class="btn primary" id="addline-submit">Añadir</button>
+      </div>
+    </div>
+  </div>
+
   <script src="{{ url_for('static', path='app.js') }}?v={{ asset_version }}"></script>
-  {% block scripts %}{% endblock %}
-</body>
+  {% block scripts %}{% endblock %}</body>
 </html>

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Papelera · {{ title }}{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <span class="page-eyebrow">Papelera</span>
+    <h1>Papelera</h1>
+    <p class="muted">Lo borrado se conserva aquí. Puedes restaurarlo o eliminarlo definitivamente.</p>
+  </div>
+  {% if documentos or registros %}
+  <button type="button" class="btn danger" id="papelera-vaciar">Vaciar papelera</button>
+  {% endif %}
+</div>
+
+{% if not documentos and not registros %}
+<div class="empty"><p>La papelera está vacía.</p></div>
+{% endif %}
+
+{% if documentos %}
+<div class="panel">
+  <h2 class="panel-title">Partes borrados ({{ documentos|length }})</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Fecha</th><th>Obra</th><th class="num">Líneas</th>
+        <th>Borrado</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in documentos %}
+      <tr data-document-id="{{ d.document_id }}">
+        <td>{{ d.fecha or "—" }}</td>
+        <td>{% if d.obra_codigo %}{{ d.obra_codigo }} · {% endif %}{{ d.obra_nombre or "(sin obra)" }}</td>
+        <td class="num">{{ d.num_lineas }}</td>
+        <td class="cell-sub">{{ d.deleted_at_utc or "" }}{% if d.deleted_by %} · {{ d.deleted_by }}{% endif %}</td>
+        <td class="cell-actions">
+          <button type="button" class="btn secondary small" data-restore-doc="{{ d.document_id }}">Restaurar</button>
+          <button type="button" class="btn danger small" data-hard-doc="{{ d.document_id }}"
+                  data-label="parte de {{ d.fecha or '' }} ({{ d.obra_codigo or '' }})">Eliminar</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if registros %}
+<div class="panel">
+  <h2 class="panel-title">Líneas sueltas borradas ({{ registros|length }})</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Fecha</th><th>Trabajador</th><th>Obra</th>
+        <th>Tipo</th><th class="num">Horas</th><th>Borrado</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in registros %}
+      <tr data-registro-id="{{ r.registro_id }}">
+        <td>{{ r.fecha or "—" }}</td>
+        <td>{{ r.trabajador or "—" }}{% if r.categoria %}<div class="cell-sub">{{ r.categoria }}</div>{% endif %}</td>
+        <td>{{ r.obra_codigo or "" }}{% if r.obra_nombre %}<div class="cell-sub">{{ r.obra_nombre }}</div>{% endif %}</td>
+        <td>{% if r.tipo_hora == 'extra' %}<span class="badge extra">Extra</span>{% else %}<span class="badge normal">{{ r.tipo_hora or 'Ordinaria' }}</span>{% endif %}</td>
+        <td class="num">{{ r.horas if r.horas is not none else "—" }}</td>
+        <td class="cell-sub">{{ r.deleted_at_utc or "" }}{% if r.deleted_by %} · {{ r.deleted_by }}{% endif %}</td>
+        <td class="cell-actions">
+          <button type="button" class="btn secondary small" data-restore-line="{{ r.registro_id }}">Restaurar</button>
+          <button type="button" class="btn danger small" data-hard-line="{{ r.registro_id }}"
+                  data-label="línea de {{ r.trabajador or '' }} · {{ r.fecha or '' }}">Eliminar</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

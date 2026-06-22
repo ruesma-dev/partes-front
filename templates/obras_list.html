@@ -76,6 +76,9 @@
         <td class="num">{% if o.num_incidencias %}<span class="badge warn">{{ o.num_incidencias }}</span>{% else %}—{% endif %}</td>
         <td class="cell-actions">
           <a class="btn secondary small" href="/obras/{{ o.obra_key }}">Ver</a>
+          <button type="button" class="btn danger small" data-del-obra="{{ o.obra_key }}"
+                  data-label="{% if o.obra_codigo %}{{ o.obra_codigo }} · {% endif %}{{ o.obra_nombre or '' }}"
+                  data-partes="{{ o.num_partes }}">Borrar</button>
         </td>
       </tr>
       {% endfor %}

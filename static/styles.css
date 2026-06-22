@@ -617,3 +617,55 @@ body.modal-open { overflow: hidden; }
 .badge.muted-badge{background:#eef0f2;color:#6b7280;}
 .partida-cod{font-weight:600;margin-left:4px;}
 .cell-partida .cell-sub,.cell-recurso .cell-sub{color:#6b7280;margin-top:2px;}
+
+/* Borrado / papelera */
+.btn.danger{background:#fbe9e7;color:#b3261e;border:1px solid #f3c0ba;}
+.btn.danger:hover{background:#f7d7d2;}
+.header-actions{display:flex;gap:8px;align-items:center;}
+.line-del{margin-left:6px;border:none;background:transparent;color:#c0c4cc;cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px;}
+.line-del:hover{background:#fbe9e7;color:#b3261e;}
+.panel-title{margin:0 0 10px;font-size:15px;font-weight:600;}
+
+/* Crear parte / calendario */
+.nuevo-grid{display:grid;grid-template-columns:minmax(320px,1fr) minmax(320px,1.2fr);gap:20px;align-items:start;}
+@media(max-width:880px){.nuevo-grid{grid-template-columns:1fr;}}
+.nuevo-form,.nuevo-cal{padding:24px 26px;}
+.nuevo-form .field{margin-bottom:16px;}
+.nuevo-form label{display:block;font-size:13px;font-weight:600;margin-bottom:5px;color:#3a3f4b;}
+.field-row{display:flex;gap:12px;}
+.field-row .field{flex:1;}
+.combo-simple{position:relative;}
+.combo-simple .combo-panel{position:absolute;left:0;right:0;top:100%;z-index:30;background:#fff;border:1px solid #e2e5ea;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.10);max-height:260px;overflow:auto;margin-top:4px;}
+.combo-option{padding:8px 11px;cursor:pointer;font-size:13px;}
+.combo-option:hover{background:#eef3ff;}
+.nuevo-sel{display:flex;align-items:center;gap:8px;margin:10px 0 6px;}
+.dias-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;min-height:4px;}
+.dia-chip{display:inline-flex;align-items:center;gap:4px;background:#eef3ff;color:#1f4bd8;border-radius:14px;padding:3px 6px 3px 9px;font-size:12px;font-weight:600;}
+.dia-chip button{border:none;background:transparent;color:#1f4bd8;cursor:pointer;font-size:14px;line-height:1;padding:0 2px;}
+.form-status{margin-top:10px;font-size:13px;}
+.form-status.ok{color:#1b873f;}
+.form-status.error{color:#b3261e;}
+.cal-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;}
+.cal-modes{display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:13px;margin-bottom:10px;}
+.cal-modes label{display:inline-flex;align-items:center;gap:5px;cursor:pointer;}
+.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;}
+.cal-dow{text-align:center;font-size:11px;font-weight:700;color:#9aa0ab;padding:4px 0;}
+.cal-day{border:1px solid #e6e9ef;background:#fff;border-radius:8px;padding:9px 0;cursor:pointer;font-size:13px;font-weight:500;transition:background .12s,border-color .12s;}
+.cal-day:hover{background:#f3f6ff;border-color:#c9d6ff;}
+.cal-day.sel{background:#1f4bd8;border-color:#1f4bd8;color:#fff;font-weight:700;}
+.cal-day.range-start{outline:2px solid #f5a623;outline-offset:-2px;}
+.cal-hint{font-size:12px;margin-top:10px;}
+.table-scroll{overflow-x:auto;overflow-y:visible;}
+
+/* Modal añadir línea */
+.addline-backdrop{position:fixed;inset:0;background:rgba(20,22,28,.45);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px;}
+.addline-backdrop[hidden]{display:none;}
+.addline-card{background:#fff;border-radius:14px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,.28);display:flex;flex-direction:column;}
+.addline-head{display:flex;align-items:center;justify-content:space-between;padding:15px 18px;border-bottom:1px solid var(--line);}
+.addline-x{border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;color:#9aa0ab;}
+.addline-x:hover{color:#333;}
+.addline-body{padding:16px 18px;}
+.addline-body .field{margin-bottom:13px;}
+.addline-body label{display:block;font-size:13px;font-weight:600;margin-bottom:5px;color:#3a3f4b;}
+.addline-locked{padding:9px 11px;background:#f4f6fa;border:1px solid #e6e9ef;border-radius:8px;font-size:13px;font-weight:600;color:#3a3f4b;}
+.addline-foot{display:flex;justify-content:flex-end;gap:10px;padding:13px 18px;border-top:1px solid var(--line);}

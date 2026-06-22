@@ -14,7 +14,17 @@
       {% if detail.dni %} · DNI {{ detail.dni }}{% endif %}
     </p>
   </div>
-  <a class="btn secondary" href="/trabajadores">← Trabajadores</a>
+  <div class="header-actions">
+    <button type="button" class="btn primary" data-add-line
+            data-emp-ide="{{ worker_key[4:] if worker_key.startswith('emp-') else '' }}"
+            data-emp-codigo="{{ detail.codigo or '' }}"
+            data-emp-nombre="{{ detail.nombre or '' }}"
+            data-emp-dni="{{ detail.dni or '' }}"
+            data-emp-label="{{ detail.nombre or '' }}">+ Añadir línea</button>
+    <a class="btn secondary" href="/trabajadores">← Trabajadores</a>
+    <button type="button" class="btn danger" data-del-worker="{{ worker_key }}"
+            data-label="{{ detail.nombre }}">Borrar persona</button>
+  </div>
 </div>
 
 <div class="stat-grid">
@@ -117,6 +127,7 @@
 
 <div class="panel">
   <div class="panel-header"><h2>Registros horarios</h2></div>
+  <div class="table-scroll">
   <table class="table lines-table filterable" id="lines-table">
     <thead>
       <tr>
@@ -153,6 +164,7 @@
                  value="{{ r.fecha or '' }}">
           <a class="row-detail" href="/partes/{{ r.document_id }}" title="Abrir detalle del parte">↗</a>
           {% if r.es_futuro %}<span class="warn-future" title="Fecha futura: posterior al mes en curso">⚠</span>{% endif %}
+          <button type="button" class="line-del" title="Mover esta línea a la papelera">✕</button>
         </td>
         <td class="cell-obra">
           {% if sigrid_enabled %}
@@ -231,6 +243,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 {% endblock %}
 
