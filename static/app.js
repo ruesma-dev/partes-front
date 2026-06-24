@@ -1456,6 +1456,128 @@
     });
   }
 
+  // ---- Editar PARTIDA (imputacion) por linea en las vistas de detalle. ----
+  // Reutiliza /api/sigrid/partidas (partidas-hoja de la obra del registro) y
+  // persiste con PATCH /api/registros/{id}/partida (accion deshacible).
+  function wirePartidaEdit() {
+    var cache = {};  // obra_ide -> Promise<items>
+
+    function loadPartidas(obra) {
+      if (!cache[obra]) {
+        cache[obra] = fetch(
+          "/api/sigrid/partidas?obra_ide=" + encodeURIComponent(obra),
+          { headers: { Accept: "application/json" } }
+        )
+          .then(function (r) { return r.json(); })
+          .then(function (d) { return (d && d.items) || []; })
+          .catch(function () { return []; });
+      }
+      return cache[obra];
+    }
+
+    function plabel(p) {
+      return "[" + (p.capitulo || "?") + "] " +
+        (p.cod ? p.cod + " · " : "") + (p.res || "");
+    }
+
+    function openEditor(cell, regId, obra) {
+      if (cell.querySelector(".partida-editor")) return;
+      var prev = cell.innerHTML;
+      var ed = document.createElement("div");
+      ed.className = "partida-editor combo-obra";
+      ed.innerHTML =
+        '<input type="text" class="combo-input" autocomplete="off" ' +
+        'placeholder="Cargando partidas…" disabled>' +
+        '<div class="combo-panel" hidden></div>' +
+        '<div class="partida-editor-actions">' +
+        '<button type="button" class="btn-link partida-cancel">Cancelar</button>' +
+        '</div>';
+      cell.innerHTML = "";
+      cell.appendChild(ed);
+      var input = ed.querySelector(".combo-input");
+      var panel = ed.querySelector(".combo-panel");
+      var items = [];
+
+      function restore() { cell.innerHTML = prev; wireCell(cell); }
+      ed.querySelector(".partida-cancel").addEventListener("click", restore);
+
+      function show(list) {
+        panel.innerHTML = "";
+        if (!list.length) { panel.hidden = true; return; }
+        list.slice(0, 40).forEach(function (p) {
+          var row = document.createElement("div");
+          row.className = "combo-option";
+          row.textContent = plabel(p);
+          row.addEventListener("mousedown", function (ev) {
+            ev.preventDefault(); save(p);
+          });
+          panel.appendChild(row);
+        });
+        panel.hidden = false;
+      }
+
+      function save(p) {
+        input.disabled = true; input.value = plabel(p); panel.hidden = true;
+        fetch("/api/registros/" + regId + "/partida", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            partida_ide: p.ide != null ? p.ide : null,
+            partida_cod: p.cod || null,
+            partida_res: p.res || null,
+            partida_capitulo: p.capitulo || null
+          })
+        }).then(function (r) {
+          if (r.ok) { window.location.reload(); }
+          else { alert("No se pudo cambiar la partida."); restore(); }
+        }).catch(function () {
+          alert("Error de red al cambiar la partida."); restore();
+        });
+      }
+
+      input.addEventListener("input", function () {
+        var q = input.value.toLowerCase();
+        show(items.filter(function (p) {
+          return plabel(p).toLowerCase().indexOf(q) !== -1;
+        }));
+      });
+      input.addEventListener("focus", function () {
+        if (!input.disabled) show(items);
+      });
+      document.addEventListener("click", function (ev) {
+        if (!panel.hidden && !ed.contains(ev.target)) panel.hidden = true;
+      });
+
+      loadPartidas(obra).then(function (list) {
+        items = list;
+        input.disabled = false;
+        input.placeholder = items.length
+          ? ("Buscar partida… (" + items.length + ")")
+          : "Esta obra no tiene partidas";
+        input.focus();
+      });
+    }
+
+    function wireCell(cell) {
+      var tr = cell.closest("[data-registro-id]");
+      if (!tr) return;
+      var regId = tr.getAttribute("data-registro-id");
+      var obra = tr.getAttribute("data-obra-ide");
+      if (!obra) return;  // sin obra casada no hay presupuesto que imputar
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "partida-edit-btn";
+      btn.title = "Editar la partida (imputacion)";
+      btn.textContent = "✎";
+      btn.addEventListener("click", function () {
+        openEditor(cell, regId, obra);
+      });
+      cell.appendChild(btn);
+    }
+
+    document.querySelectorAll("td.cell-partida").forEach(wireCell);
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     // Toggle del visor de PDF.
     var pdfBtn = document.getElementById("pdfToggle");
@@ -1487,6 +1609,7 @@
     wireUndo();
     wireConciliacion();
     wireBorrado();
+    wirePartidaEdit();
     wireNuevoParte();
     wireAddLine();
 

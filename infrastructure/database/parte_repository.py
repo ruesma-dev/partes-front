@@ -122,6 +122,9 @@ class RegistroView:
     partida_res: Optional[str] = None
     partida_capitulo: Optional[str] = None         # CD/CI/CP
     partida_match_method: Optional[str] = None      # auto_nombre|auto_categoria|manual|sin
+    # Obra (desnormalizada) del registro: necesaria para editar la partida en
+    # las vistas donde las filas pueden ser de obras distintas (por trabajador).
+    obra_ide: Optional[int] = None
     # --- Casado de RECURSO / parte de trabajo por sv3 --- #
     recurso_ide: Optional[int] = None
     recurso_cif: Optional[str] = None
@@ -310,6 +313,8 @@ _REG_UNDO_FIELDS = (
     "hora_ide", "hora_codigo", "hora_descripcion", "hora_ext",
     "hora_precio_coste", "hora_precio_nomina", "hora_match_method",
     "fecha", "fecha_int", "obra_ide", "obra_codigo", "obra_nombre",
+    "partida_ide", "partida_cod", "partida_res", "partida_capitulo",
+    "partida_match_method",
 )
 _DOC_UNDO_FIELDS = (
     "fecha", "fecha_int", "obra_ide", "obra_codigo", "obra_nombre",
@@ -1026,6 +1031,41 @@ class ParteReviewRepository:
             self._record_undo(
                 session, action="registro_hora",
                 description=f"Cambiar codigo de hora · {label}",
+                registros=[snap],
+            )
+            session.commit()
+        return True
+
+    def set_registro_partida(
+        self,
+        *,
+        registro_id: int,
+        partida_ide: int | None,
+        partida_cod: str | None,
+        partida_res: str | None,
+        partida_capitulo: str | None,
+    ) -> bool:
+        """Reasigna la PARTIDA (imputacion) de un registro manualmente.
+
+        Marca ``partida_match_method='manual'`` y registra el snapshot ANTERIOR
+        para que la accion sea deshacible. La obra del registro no cambia: solo
+        se permite imputar a una partida-hoja del presupuesto de SU obra (el
+        front carga las partidas con ``/api/sigrid/partidas?obra_ide=...``).
+        """
+        with self._session_factory.create_session() as session:
+            reg = session.get(ParteRegistroOrm, registro_id)
+            if reg is None:
+                return False
+            snap = _reg_snapshot(reg)
+            label = _reg_label(reg)
+            reg.partida_ide = partida_ide
+            reg.partida_cod = partida_cod or None
+            reg.partida_res = partida_res or None
+            reg.partida_capitulo = partida_capitulo or None
+            reg.partida_match_method = "manual"
+            self._record_undo(
+                session, action="registro_partida",
+                description=f"Cambiar partida · {label}",
                 registros=[snap],
             )
             session.commit()
@@ -1785,6 +1825,7 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
         fecha=reg.fecha,
         obra_codigo=reg.obra_codigo,
         obra_nombre=reg.obra_nombre,
+        obra_ide=reg.obra_ide,
         categoria=reg.categoria,
         tipo_hora=reg.tipo_hora,
         es_incidencia=reg.es_incidencia,

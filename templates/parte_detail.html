@@ -144,7 +144,7 @@
         </thead>
         <tbody>
           {% for r in emp.registros %}
-          <tr data-registro-id="{{ r.id }}">
+          <tr data-registro-id="{{ r.id }}" data-obra-ide="{{ parte.obra_ide if parte.obra_ide is not none else '' }}">
             <td>
               {% if r.es_incidencia %}
                 <span class="badge warn" title="{{ r.incidencia_texto or '' }}">{{ r.incidencia_codigo }} · {{ r.incidencia_codigo|incidencia }}</span>

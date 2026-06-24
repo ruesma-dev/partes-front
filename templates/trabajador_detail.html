@@ -157,7 +157,7 @@
     </thead>
     <tbody>
       {% for r in detail.registros %}
-      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}">
+      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}" data-obra-ide="{{ r.obra_ide if r.obra_ide is not none else '' }}">
         <td class="cell-fecha">
           <input type="date" class="fecha-edit cell-edit"
                  data-document-id="{{ r.document_id }}"

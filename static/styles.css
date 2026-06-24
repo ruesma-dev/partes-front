@@ -681,3 +681,34 @@ body.col-resizing{cursor:col-resize !important;user-select:none !important;}
 .addline-body label{display:block;font-size:13px;font-weight:600;margin-bottom:5px;color:#3a3f4b;}
 .addline-locked{padding:9px 11px;background:#f4f6fa;border:1px solid #e6e9ef;border-radius:8px;font-size:13px;font-weight:600;color:#3a3f4b;}
 .addline-foot{display:flex;justify-content:flex-end;gap:10px;padding:13px 18px;border-top:1px solid var(--line);}
+
+/* ---- Edición de PARTIDA por línea (vista de detalle) ---- */
+.partida-edit-btn {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--border, #d0d4da);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--muted, #667085);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+.partida-edit-btn:hover {
+  border-color: var(--brand, #c1272d);
+  color: var(--brand, #c1272d);
+}
+.partida-editor { position: relative; min-width: 220px; }
+.partida-editor .combo-input { width: 100%; }
+.partida-editor-actions { margin-top: 4px; }
+.btn-link {
+  border: none;
+  background: none;
+  color: var(--muted, #667085);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+.btn-link:hover { color: var(--brand, #c1272d); }

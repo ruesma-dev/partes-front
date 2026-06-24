@@ -135,6 +135,13 @@ class HoraPayload(BaseModel):
     hora_ide: int
 
 
+class PartidaPayload(BaseModel):
+    partida_ide: int | None = None
+    partida_cod: str | None = None
+    partida_res: str | None = None
+    partida_capitulo: str | None = None
+
+
 class FechaPayload(BaseModel):
     fecha: str  # ISO 'YYYY-MM-DD' (input date) o 'DD/MM/YYYY'
 
@@ -1026,6 +1033,33 @@ def build_app(settings: Settings) -> FastAPI:
             "hora_descripcion": option.descripcion,
             "hora_ext": option.ext,
             "tipo_hora": "extra" if option.ext == 1 else "normal",
+        }
+
+    @app.patch("/api/registros/{registro_id}/partida")
+    def api_set_registro_partida(
+        registro_id: int,
+        payload: PartidaPayload = Body(...),
+    ) -> dict[str, Any]:
+        """Reimputa manualmente la partida de un registro. El front envia los
+        4 campos (ide/cod/res/capitulo) de la partida-hoja elegida en el combo
+        cargado con /api/sigrid/partidas (partidas del presupuesto de la obra).
+        """
+        ok = repository.set_registro_partida(
+            registro_id=registro_id,
+            partida_ide=payload.partida_ide,
+            partida_cod=payload.partida_cod,
+            partida_res=payload.partida_res,
+            partida_capitulo=payload.partida_capitulo,
+        )
+        if not ok:
+            raise HTTPException(status_code=404, detail="Registro no encontrado")
+        return {
+            "ok": True,
+            "registro_id": registro_id,
+            "partida_ide": payload.partida_ide,
+            "partida_cod": payload.partida_cod,
+            "partida_res": payload.partida_res,
+            "partida_capitulo": payload.partida_capitulo,
         }
 
     @app.patch("/api/registros/{registro_id}")
