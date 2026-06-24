@@ -458,6 +458,17 @@ class ParteReviewRepository:
                     "  actor VARCHAR(120)"
                     ")"
                 ))
+                # Parche idempotente: si 'undo_log' ya existia SIN la columna
+                # 'actor' (tabla creada por una version anterior), el CREATE
+                # TABLE IF NOT EXISTS de arriba NO la modifica. Sin este ALTER,
+                # SQLAlchemy genera 'SELECT ... undo_log.actor' y Postgres
+                # responde "column actor does not exist", reventando
+                # list_undo/undo_last (el undo queda inservible). Tambien deja
+                # el terreno listo para el undo/papelera por usuario.
+                conn.execute(text(
+                    "ALTER TABLE undo_log ADD COLUMN IF NOT EXISTS "
+                    "actor VARCHAR(120)"
+                ))
             return True
         except Exception:
             logger.exception("[parte-repo-sv4] create_all fallo (continua).")
