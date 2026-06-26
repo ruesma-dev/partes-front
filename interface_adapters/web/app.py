@@ -634,12 +634,22 @@ def build_app(settings: Settings) -> FastAPI:
                 status_code=404,
             )
         registro_id = _as_int(data.get("registro_id"))
+        registro_ids_in = data.get("registro_ids")
         worker_key = data.get("worker_key")
         nombre_leido_in = data.get("nombre_leido")
         updated = 0
         leidos: list[str] = []
         try:
-            if registro_id is not None:
+            if isinstance(registro_ids_in, list) and registro_ids_in:
+                ids = [_as_int(x) for x in registro_ids_in]
+                ids = [x for x in ids if x is not None]
+                updated = repository.reassign_empleado_by_registro_ids(
+                    registro_ids=ids, ide=emp.ide, codigo=emp.codigo,
+                    nombre=emp.nombre, dni=emp.dni,
+                )
+                # Acotado a lineas concretas: no se crea alias de mapeo.
+                leidos = []
+            elif registro_id is not None:
                 leido = repository.get_registro_leido(registro_id)
                 if not leido:
                     return JSONResponse(

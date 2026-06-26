@@ -1404,6 +1404,46 @@ class ParteReviewRepository:
             session.commit()
         return len(affected), leidos
 
+    def reassign_empleado_by_registro_ids(
+        self, *, registro_ids: list[int], ide: int,
+        codigo: str | None, nombre: str | None, dni: str | None,
+    ) -> int:
+        """Reasigna el empleado SOLO a los registros indicados (activos).
+
+        A diferencia de ``reassign_empleado_by_leido`` (que afecta a TODOS los
+        registros con el mismo nombre leido), esto acota el cambio exactamente
+        a ``registro_ids`` y NO crea alias: es una correccion por linea, no una
+        regla de mapeo nombre->empleado.
+        """
+        ids = [int(x) for x in registro_ids if x is not None]
+        if not ids:
+            return 0
+        with self._session_factory.create_session() as session:
+            stmt = (
+                select(ParteRegistroOrm)
+                .join(ParteDocumentOrm)
+                .where(ParteRegistroOrm.id.in_(ids))
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
+                .where(ParteDocumentOrm.is_active.is_(True))
+            )
+            affected = list(session.execute(stmt).scalars().all())
+            if not affected:
+                return 0
+            reg_snaps = [_reg_snapshot(r) for r in affected]
+            for r in affected:
+                r.empleado_ide = ide
+                r.empleado_codigo = codigo
+                r.empleado_nombre = nombre
+                r.empleado_dni = dni
+            self._record_undo(
+                session, action="empleado",
+                description=f"Reasignar {len(affected)} línea(s) → "
+                            f"{nombre or codigo or ide}",
+                registros=reg_snaps,
+            )
+            session.commit()
+        return len(affected)
+
     def get_sharepoint_ref(self, document_id: str) -> dict | None:
         """Datos para descargar el PDF de SharePoint por Graph."""
         with self._session_factory.create_session() as session:

@@ -61,10 +61,16 @@
     var current = row ? row.querySelector(".combo-hora-current") : null;
 
     if (!value) { flash(select, null); return; }
+    var ids = [registroId];
+    var bulk = (typeof PartidaSel !== "undefined" &&
+                PartidaSel.has(registroId) && PartidaSel.count() > 1);
+    if (bulk) ids = PartidaSel.ids();
     select.disabled = true;
-    patchHora(registroId, value)
-      .then(function (data) {
+    Promise.all(ids.map(function (id) { return patchHora(id, value); }))
+      .then(function (results) {
         flash(select, "saved");
+        if (bulk) { window.location.reload(); return; }
+        var data = results[0];
         if (current) {
           current.textContent = (data.hora_codigo || "") +
             (data.hora_descripcion ? " · " + data.hora_descripcion : "");
@@ -151,16 +157,24 @@
       var regId = inp.getAttribute("data-registro-id");
       var val = inp.value;
       if (val === "") return;
+      var ids = [regId];
+      var bulk = (typeof PartidaSel !== "undefined" &&
+                  PartidaSel.has(regId) && PartidaSel.count() > 1);
+      if (bulk) ids = PartidaSel.ids();
       inp.disabled = true;
-      fetch("/api/registros/" + regId, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ horas: val }),
-      }).then(function (r) {
-        if (!r.ok) throw new Error("HTTP " + r.status);
-        return r.json();
-      }).then(function () { flashEl(inp, "saved"); })
-        .catch(function () { flashEl(inp, "error"); })
+      Promise.all(ids.map(function (id) {
+        return fetch("/api/registros/" + id, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ horas: val }),
+        }).then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        });
+      })).then(function () {
+        flashEl(inp, "saved");
+        if (bulk) window.location.reload();
+      }).catch(function () { flashEl(inp, "error"); })
         .finally(function () { inp.disabled = false; });
     });
   }
@@ -190,13 +204,7 @@
     var activeIdx = -1;
     var repos = null;
 
-    function place() {
-      var r = input.getBoundingClientRect();
-      panel.style.top = (r.bottom + 4) + "px";
-      panel.style.left = r.left + "px";
-      panel.style.minWidth = Math.max(r.width, 280) + "px";
-      panel.style.maxWidth = "560px";
-    }
+    function place() { positionPanel(input, panel); }
     function close() {
       panel.hidden = true; activeIdx = -1;
       if (repos) {
@@ -246,15 +254,45 @@
         render();
       });
     }
-    function pick(o) {
-      input.value = obraLabel(o);
-      close();
-      setStatus(statusId, "Guardando…", null);
-      fetch("/api/partes/" + docId + "/obra", {
+    function patchObra(d, o) {
+      return fetch("/api/partes/" + d + "/obra", {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ codigo: o.codigo, ide: o.ide, nombre: o.nombre }),
-      }).then(function (r) {
+      });
+    }
+    function pick(o) {
+      input.value = obraLabel(o);
+      close();
+      // ¿La fila esta dentro de una seleccion multiple? -> cambio en bloque.
+      // La obra es por PARTE (documento): se aplica a todos los documentos
+      // unicos de la seleccion, afectando a TODAS sus lineas (no solo las
+      // seleccionadas). Por eso se pide confirmacion.
+      var tr = wrap.closest("[data-registro-id]");
+      var regId = tr ? tr.getAttribute("data-registro-id") : null;
+      if (regId && PartidaSel.has(regId) && PartidaSel.count() > 1) {
+        var docs = {};
+        PartidaSel.ids().forEach(function (id) {
+          var t = PartidaSel.tr(id);
+          var d = t && t.getAttribute("data-document-id");
+          if (d) docs[d] = true;
+        });
+        var docIds = Object.keys(docs);
+        if (!confirm("Vas a cambiar la obra de " + docIds.length + " parte(s) " +
+            "—todas sus líneas, no solo las seleccionadas— a «" + obraLabel(o) +
+            "». ¿Continuar?")) {
+          return;
+        }
+        setStatus(statusId, "Guardando…", null);
+        Promise.all(docIds.map(function (d) { return patchObra(d, o); }))
+          .then(function () { window.location.reload(); })
+          .catch(function () {
+            flashEl(input, "error"); setStatus(statusId, "✗ Error", "error");
+          });
+        return;
+      }
+      setStatus(statusId, "Guardando…", null);
+      patchObra(docId, o).then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
       }).then(function () {
@@ -499,9 +537,20 @@
   // ---------------------------------------------------------------- //
   function _empReasignar(wrap, ide, label) {
     var body = { ide: ide };
-    if (wrap.getAttribute("data-registro-id"))
-      body.registro_id = parseInt(wrap.getAttribute("data-registro-id"), 10);
-    else if (wrap.getAttribute("data-worker-key"))
+    var regId = wrap.getAttribute("data-registro-id");
+    if (regId) {
+      // Vista de detalle: acota la reasignacion a la(s) linea(s). Si la fila
+      // esta en una seleccion multiple, aplica a TODAS las seleccionadas; si
+      // no, solo a esta. No toca el resto de lineas del mismo trabajador.
+      if (typeof PartidaSel !== "undefined" &&
+          PartidaSel.has(regId) && PartidaSel.count() > 1) {
+        body.registro_ids = PartidaSel.ids().map(function (x) {
+          return parseInt(x, 10);
+        });
+      } else {
+        body.registro_ids = [parseInt(regId, 10)];
+      }
+    } else if (wrap.getAttribute("data-worker-key"))
       body.worker_key = wrap.getAttribute("data-worker-key");
     else if (wrap.getAttribute("data-nombre-leido"))
       body.nombre_leido = wrap.getAttribute("data-nombre-leido");
@@ -1456,126 +1505,286 @@
     });
   }
 
-  // ---- Editar PARTIDA (imputacion) por linea en las vistas de detalle. ----
-  // Reutiliza /api/sigrid/partidas (partidas-hoja de la obra del registro) y
-  // persiste con PATCH /api/registros/{id}/partida (accion deshacible).
+  // ============ Edicion de PARTIDA + seleccion multiple (coordinados) ===========
+  // Estado de seleccion compartido entre el editor por-celda y la barra, para
+  // que editar la partida de una linea seleccionada la aplique a TODA la
+  // seleccion (de la misma obra). La partida pertenece al presupuesto de UNA
+  // obra, asi que el bloque solo agrupa lineas que comparten obra.
+  var PartidaSel = (function () {
+    var sel = {};               // registro_id -> tr
+    return {
+      has: function (id) { return !!sel[id]; },
+      ids: function () { return Object.keys(sel); },
+      count: function () { return Object.keys(sel).length; },
+      tr: function (id) { return sel[id]; },
+      set: function (id, tr) { sel[id] = tr; },
+      del: function (id) { delete sel[id]; },
+      clear: function () { sel = {}; },
+      idsSameObra: function (obra) {
+        return Object.keys(sel).filter(function (id) {
+          return (sel[id].getAttribute("data-obra-ide") || "") === String(obra);
+        });
+      }
+    };
+  })();
+
+  // Posiciona un panel (position:fixed) bajo/sobre un input, escapando del
+  // overflow horizontal de las tablas (misma estrategia que combo-obra/emp).
+  function positionPanel(input, panel) {
+    var r = input.getBoundingClientRect();
+    panel.style.position = "fixed";
+    panel.style.left = r.left + "px";
+    panel.style.width = Math.max(r.width, 240) + "px";
+    var below = window.innerHeight - r.bottom;
+    if (below > 220 || below >= r.top) {
+      panel.style.top = (r.bottom + 4) + "px";
+      panel.style.bottom = "auto";
+      panel.style.maxHeight = Math.max(120, Math.min(300, below - 12)) + "px";
+    } else {
+      panel.style.top = "auto";
+      panel.style.bottom = (window.innerHeight - r.top + 4) + "px";
+      panel.style.maxHeight = Math.max(120, Math.min(300, r.top - 12)) + "px";
+    }
+  }
+
+  var _partidasCache = {};
+  function loadPartidas(obra) {
+    if (!_partidasCache[obra]) {
+      _partidasCache[obra] = fetch(
+        "/api/sigrid/partidas?obra_ide=" + encodeURIComponent(obra),
+        { headers: { Accept: "application/json" } }
+      ).then(function (r) { return r.json(); })
+       .then(function (d) { return (d && d.items) || []; })
+       .catch(function () { return []; });
+    }
+    return _partidasCache[obra];
+  }
+
+  function plabel(p) {
+    return "[" + (p.capitulo || "?") + "] " +
+      (p.cod ? p.cod + " \u00b7 " : "") + (p.res || "");
+  }
+
+  function applyPartidaToIds(ids, p) {
+    var body = JSON.stringify({
+      partida_ide: p.ide != null ? p.ide : null,
+      partida_cod: p.cod || null,
+      partida_res: p.res || null,
+      partida_capitulo: p.capitulo || null
+    });
+    return Promise.all(ids.map(function (id) {
+      return fetch("/api/registros/" + id + "/partida", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: body
+      });
+    }));
+  }
+
+  // Buscador type-ahead de partidas dentro de `host` para `obra`; al elegir
+  // invoca onPick(partida).
+  function buildPartidaPicker(host, obra, onPick) {
+    host.innerHTML =
+      '<input type="text" class="combo-input" autocomplete="off" ' +
+      'placeholder="Cargando partidas\u2026" disabled>' +
+      '<div class="combo-panel partida-panel" hidden></div>';
+    var input = host.querySelector(".combo-input");
+    var panel = host.querySelector(".combo-panel");
+    var items = [];
+
+    function show(list) {
+      panel.innerHTML = "";
+      if (!list.length) { panel.hidden = true; return; }
+      list.slice(0, 60).forEach(function (p) {
+        var row = document.createElement("div");
+        row.className = "combo-option";
+        row.textContent = plabel(p);
+        row.addEventListener("mousedown", function (ev) {
+          ev.preventDefault(); onPick(p);
+        });
+        panel.appendChild(row);
+      });
+      panel.hidden = false;
+      positionPanel(input, panel);
+    }
+    input.addEventListener("input", function () {
+      var q = input.value.toLowerCase();
+      show(items.filter(function (p) {
+        return plabel(p).toLowerCase().indexOf(q) !== -1;
+      }));
+    });
+    input.addEventListener("focus", function () { if (!input.disabled) show(items); });
+    function reposition() { if (!panel.hidden) positionPanel(input, panel); }
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+
+    loadPartidas(obra).then(function (list) {
+      items = list;
+      input.disabled = false;
+      input.placeholder = items.length
+        ? ("Buscar partida\u2026 (" + items.length + ")")
+        : "Esta obra no tiene partidas";
+      input.focus();
+    });
+    return { input: input };
+  }
+
+  // Editor por-celda (boton \u270e). Si la fila esta en una seleccion multiple,
+  // la partida elegida se aplica a TODAS las seleccionadas de la MISMA obra;
+  // las de otra obra se omiten con aviso.
   function wirePartidaEdit() {
-    var cache = {};  // obra_ide -> Promise<items>
-
-    function loadPartidas(obra) {
-      if (!cache[obra]) {
-        cache[obra] = fetch(
-          "/api/sigrid/partidas?obra_ide=" + encodeURIComponent(obra),
-          { headers: { Accept: "application/json" } }
-        )
-          .then(function (r) { return r.json(); })
-          .then(function (d) { return (d && d.items) || []; })
-          .catch(function () { return []; });
-      }
-      return cache[obra];
-    }
-
-    function plabel(p) {
-      return "[" + (p.capitulo || "?") + "] " +
-        (p.cod ? p.cod + " · " : "") + (p.res || "");
-    }
-
-    function openEditor(cell, regId, obra) {
-      if (cell.querySelector(".partida-editor")) return;
-      var prev = cell.innerHTML;
-      var ed = document.createElement("div");
-      ed.className = "partida-editor combo-obra";
-      ed.innerHTML =
-        '<input type="text" class="combo-input" autocomplete="off" ' +
-        'placeholder="Cargando partidas…" disabled>' +
-        '<div class="combo-panel" hidden></div>' +
-        '<div class="partida-editor-actions">' +
-        '<button type="button" class="btn-link partida-cancel">Cancelar</button>' +
-        '</div>';
-      cell.innerHTML = "";
-      cell.appendChild(ed);
-      var input = ed.querySelector(".combo-input");
-      var panel = ed.querySelector(".combo-panel");
-      var items = [];
-
-      function restore() { cell.innerHTML = prev; wireCell(cell); }
-      ed.querySelector(".partida-cancel").addEventListener("click", restore);
-
-      function show(list) {
-        panel.innerHTML = "";
-        if (!list.length) { panel.hidden = true; return; }
-        list.slice(0, 40).forEach(function (p) {
-          var row = document.createElement("div");
-          row.className = "combo-option";
-          row.textContent = plabel(p);
-          row.addEventListener("mousedown", function (ev) {
-            ev.preventDefault(); save(p);
-          });
-          panel.appendChild(row);
-        });
-        panel.hidden = false;
-      }
-
-      function save(p) {
-        input.disabled = true; input.value = plabel(p); panel.hidden = true;
-        fetch("/api/registros/" + regId + "/partida", {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            partida_ide: p.ide != null ? p.ide : null,
-            partida_cod: p.cod || null,
-            partida_res: p.res || null,
-            partida_capitulo: p.capitulo || null
-          })
-        }).then(function (r) {
-          if (r.ok) { window.location.reload(); }
-          else { alert("No se pudo cambiar la partida."); restore(); }
-        }).catch(function () {
-          alert("Error de red al cambiar la partida."); restore();
-        });
-      }
-
-      input.addEventListener("input", function () {
-        var q = input.value.toLowerCase();
-        show(items.filter(function (p) {
-          return plabel(p).toLowerCase().indexOf(q) !== -1;
-        }));
-      });
-      input.addEventListener("focus", function () {
-        if (!input.disabled) show(items);
-      });
-      document.addEventListener("click", function (ev) {
-        if (!panel.hidden && !ed.contains(ev.target)) panel.hidden = true;
-      });
-
-      loadPartidas(obra).then(function (list) {
-        items = list;
-        input.disabled = false;
-        input.placeholder = items.length
-          ? ("Buscar partida… (" + items.length + ")")
-          : "Esta obra no tiene partidas";
-        input.focus();
-      });
-    }
-
     function wireCell(cell) {
       var tr = cell.closest("[data-registro-id]");
       if (!tr) return;
       var regId = tr.getAttribute("data-registro-id");
       var obra = tr.getAttribute("data-obra-ide");
-      if (!obra) return;  // sin obra casada no hay presupuesto que imputar
+      if (!obra) return;
       var btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "partida-edit-btn";
-      btn.title = "Editar la partida (imputacion)";
-      btn.textContent = "✎";
+      btn.type = "button"; btn.className = "partida-edit-btn";
+      btn.title = "Editar la partida (imputacion)"; btn.textContent = "\u270e";
       btn.addEventListener("click", function () {
         openEditor(cell, regId, obra);
       });
       cell.appendChild(btn);
     }
-
+    function openEditor(cell, regId, obra) {
+      if (cell.querySelector(".partida-editor")) return;
+      var prev = cell.innerHTML;
+      var ed = document.createElement("div");
+      ed.className = "partida-editor";
+      ed.innerHTML = '<div class="pe-host"></div>' +
+        '<div class="partida-editor-actions">' +
+        '<button type="button" class="btn-link partida-cancel">Cancelar</button>' +
+        '</div>';
+      cell.innerHTML = ""; cell.appendChild(ed);
+      function restore() { cell.innerHTML = prev; wireCell(cell); }
+      ed.querySelector(".partida-cancel").addEventListener("click", restore);
+      buildPartidaPicker(ed.querySelector(".pe-host"), obra, function (p) {
+        var targets, omitidas = 0;
+        if (PartidaSel.has(regId) && PartidaSel.count() > 1) {
+          targets = PartidaSel.idsSameObra(obra);
+          omitidas = PartidaSel.count() - targets.length;
+        } else {
+          targets = [regId];
+        }
+        applyPartidaToIds(targets, p).then(function () {
+          if (omitidas > 0) {
+            alert("Partida aplicada a " + targets.length + " l\u00ednea(s). " +
+                  omitidas + " omitida(s) por ser de otra obra.");
+          }
+          window.location.reload();
+        }).catch(function () { alert("Error al cambiar la partida."); restore(); });
+      });
+    }
     document.querySelectorAll("td.cell-partida").forEach(wireCell);
+  }
+
+  // Seleccion multiple (Ctrl/Shift+click) + barra de acciones en bloque.
+  function wireBulkSelect() {
+    var rows = Array.prototype.slice.call(
+      document.querySelectorAll("tr[data-registro-id]"));
+    if (!rows.length) return;
+    var lastIdx = -1, bar = null, pickerOpen = false;
+
+    function isInteractive(t) {
+      return !!(t.closest("input,select,textarea,button,a,label,.combo-panel," +
+        ".partida-editor,.combo-obra,.combo-emp,.row-detail"));
+    }
+    function paint(tr, on) { tr.classList.toggle("row-selected", on); }
+    function toggle(tr, on) {
+      var id = tr.getAttribute("data-registro-id");
+      if (on === undefined) on = !PartidaSel.has(id);
+      if (on) { PartidaSel.set(id, tr); paint(tr, true); }
+      else { PartidaSel.del(id); paint(tr, false); }
+    }
+    function clearSel() {
+      PartidaSel.ids().forEach(function (id) {
+        var t = PartidaSel.tr(id); if (t) paint(t, false);
+      });
+      PartidaSel.clear(); renderBar();
+    }
+    function selectRange(a0, b0) {
+      var a = Math.min(a0, b0), b = Math.max(a0, b0);
+      for (var i = a; i <= b; i++) toggle(rows[i], true);
+    }
+    rows.forEach(function (tr, idx) {
+      tr.addEventListener("click", function (ev) {
+        if (!(ev.ctrlKey || ev.metaKey || ev.shiftKey)) return;
+        if (isInteractive(ev.target)) return;
+        ev.preventDefault();
+        if (ev.shiftKey && lastIdx >= 0) selectRange(lastIdx, idx);
+        else { toggle(tr); lastIdx = idx; }
+        renderBar();
+      });
+    });
+
+    function ensureBar() {
+      if (bar) return bar;
+      bar = document.createElement("div");
+      bar.className = "bulk-bar"; bar.hidden = true;
+      bar.innerHTML = '<span class="bulk-count"></span>' +
+        '<div class="bulk-actions">' +
+        '<button type="button" class="btn-bulk" data-act="partida">Editar partida</button>' +
+        '<button type="button" class="btn-bulk danger" data-act="borrar">Borrar</button>' +
+        '<button type="button" class="btn-bulk ghost" data-act="clear">Quitar selecci\u00f3n</button>' +
+        '</div><div class="bulk-picker" hidden></div>';
+      document.body.appendChild(bar);
+      bar.querySelector('[data-act="clear"]').addEventListener("click", clearSel);
+      bar.querySelector('[data-act="borrar"]').addEventListener("click", doBorrar);
+      bar.querySelector('[data-act="partida"]').addEventListener("click", doPartida);
+      return bar;
+    }
+    function renderBar() {
+      ensureBar();
+      var n = PartidaSel.count();
+      if (!n) { bar.hidden = true; closePicker(); return; }
+      bar.hidden = false;
+      bar.querySelector(".bulk-count").textContent =
+        n + (n === 1 ? " l\u00ednea seleccionada" : " l\u00edneas seleccionadas");
+    }
+    function doBorrar() {
+      var ids = PartidaSel.ids(); if (!ids.length) return;
+      if (!confirm("\u00bfMover " + ids.length + " l\u00ednea(s) a la papelera?")) return;
+      Promise.all(ids.map(function (id) {
+        return fetch("/api/registro/" + id + "/delete", { method: "POST" });
+      })).then(function () { window.location.reload(); })
+        .catch(function () { alert("Error al borrar en bloque."); });
+    }
+    function closePicker() {
+      pickerOpen = false;
+      if (bar) {
+        var p = bar.querySelector(".bulk-picker");
+        if (p) { p.hidden = true; p.innerHTML = ""; }
+      }
+    }
+    function doPartida() {
+      var ids = PartidaSel.ids(); if (!ids.length) return;
+      var obras = {};
+      ids.forEach(function (id) {
+        obras[PartidaSel.tr(id).getAttribute("data-obra-ide") || ""] = true;
+      });
+      var keys = Object.keys(obras).filter(function (k) { return k; });
+      if (keys.length !== 1) {
+        alert("Las l\u00edneas seleccionadas son de " + keys.length + " obras " +
+              "distintas. La partida pertenece a una obra: selecciona l\u00edneas " +
+              "de una sola obra para editarla en bloque.");
+        return;
+      }
+      var obra = keys[0];
+      var box = bar.querySelector(".bulk-picker");
+      box.hidden = false; pickerOpen = true;
+      buildPartidaPicker(box, obra, function (p) {
+        applyPartidaToIds(PartidaSel.idsSameObra(obra), p)
+          .then(function () { window.location.reload(); })
+          .catch(function () { alert("Error al cambiar la partida en bloque."); });
+      });
+    }
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape") {
+        if (pickerOpen) closePicker();
+        else if (PartidaSel.count()) clearSel();
+      }
+    });
   }
 
   document.addEventListener("DOMContentLoaded", function () {
@@ -1610,6 +1819,7 @@
     wireConciliacion();
     wireBorrado();
     wirePartidaEdit();
+    wireBulkSelect();
     wireNuevoParte();
     wireAddLine();
 

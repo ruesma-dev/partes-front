@@ -712,3 +712,37 @@ body.col-resizing{cursor:col-resize !important;user-select:none !important;}
   text-decoration: underline;
 }
 .btn-link:hover { color: var(--brand, #c1272d); }
+
+/* ---- Selección múltiple + acciones en bloque ---- */
+tr.row-selected > td { background: var(--brand-soft, #f7eaee) !important; }
+tr.row-selected > td:first-child { box-shadow: inset 3px 0 0 var(--brand, #9f2842); }
+.bulk-bar {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  z-index: 60; display: flex; align-items: center; gap: 14px;
+  background: #fff; border: 1px solid var(--border, #d0d4da);
+  border-radius: 12px; padding: 10px 14px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
+}
+.bulk-count {
+  font-weight: 700; color: var(--brand-strong, #7a1e33); white-space: nowrap;
+}
+.bulk-actions { display: flex; gap: 8px; }
+.btn-bulk {
+  border: 1px solid var(--border, #d0d4da); background: #fff; color: #1f2937;
+  border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+}
+.btn-bulk:hover { border-color: var(--brand, #9f2842); color: var(--brand, #9f2842); }
+.btn-bulk.danger { color: #b42318; border-color: #f1c0bb; }
+.btn-bulk.danger:hover { background: #fef3f2; border-color: #b42318; }
+.btn-bulk.ghost { color: var(--muted, #667085); }
+.bulk-picker { position: relative; min-width: 240px; }
+.bulk-picker .combo-input { width: 100%; }
+.bulk-picker .combo-panel { top: auto; bottom: 100%; margin-bottom: 4px; }
+
+/* Panel del buscador de partidas (posición fija calculada por JS). */
+.partida-panel {
+  z-index: 70; background: #fff;
+  border: 1px solid var(--line-strong, #d0d4da); border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .16); padding: 4px; overflow-y: auto;
+}
+.partida-editor .pe-host { position: relative; }
