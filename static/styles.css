@@ -290,6 +290,17 @@ h1 {
   font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em; vertical-align: middle;
   background: var(--ok-soft); color: #1f5740; border: 1px solid var(--ok-border);
 }
+.tag-recurso {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px;
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em; vertical-align: middle;
+  background: var(--ok-soft); color: #1f5740; border: 1px solid var(--ok-border);
+}
+.tag-difiere {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px;
+  font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em; vertical-align: middle;
+  background: var(--warn-soft, #fdeecd); color: var(--warn-ink, #8a5b00);
+  border: 1px solid var(--warn-border, #f0d28a);
+}
 
 /* ---------- Cabecera del parte: acciones + edicion fecha/obra ---------- */
 .header-actions { display: flex; gap: 8px; align-items: center; }

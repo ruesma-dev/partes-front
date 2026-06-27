@@ -106,6 +106,7 @@ class RegistroView:
     hora_descripcion: Optional[str]
     hora_ext: Optional[int]
     hora_match_method: Optional[str]
+    hora_candef: Optional[float]
     confianza_pct: Optional[float]
     # Datos del parte al que pertenece (para mostrar contexto/firma).
     parte_firmado: bool
@@ -435,6 +436,7 @@ class ParteReviewRepository:
                     "partida_match_score DOUBLE PRECISION",
                     "recurso_ide INTEGER", "recurso_cif VARCHAR(64)",
                     "hmo_ide INTEGER", "parte_estado VARCHAR(16)",
+                    "hora_candef DOUBLE PRECISION",
                     "deleted_at_utc VARCHAR(64)", "deleted_by VARCHAR(255)",
                 ):
                     conn.execute(text(
@@ -1857,6 +1859,40 @@ class ParteReviewRepository:
         return {"documentos": docs_creados, "lineas": lineas}
 
 
+def extras_por_jornada(registros: list["RegistroView"]) -> dict:
+    """Extras por EXCESO de jornada usando el CanDefecto del recurso.
+
+    Por cada (trabajador, dia) suma las horas ORDINARIAS y, si superan la
+    jornada por defecto del recurso (``hora_candef``), cuenta el exceso como
+    extra. NO incluye las horas ya marcadas como extra (esas se cuentan
+    aparte). Es INFORMATIVO (no reescribe datos). ``candef`` se devuelve solo
+    si todos los registros comparten la misma jornada (vista de 1 trabajador).
+    """
+    por: dict[tuple, float] = {}
+    candef_wk: dict[object, float] = {}
+    for r in registros:
+        if r.es_incidencia:
+            continue
+        wk = r.recurso_ide if r.recurso_ide is not None else (
+            r.trabajador_nombre or "?")
+        if r.hora_candef and wk not in candef_wk:
+            candef_wk[wk] = float(r.hora_candef)
+        if r.hora_ext == 1 or (r.tipo_hora or "") == "extra":
+            continue  # las extra explicitas ya se contabilizan aparte
+        key = (wk, r.fecha)
+        por[key] = por.get(key, 0.0) + (r.horas or 0.0)
+    total = 0.0
+    dias = 0
+    for (wk, _dia), normal in por.items():
+        cd = candef_wk.get(wk)
+        if cd and normal > cd:
+            total += normal - cd
+            dias += 1
+    vals = set(candef_wk.values())
+    candef = next(iter(vals)) if len(vals) == 1 else None
+    return {"total_exceso": round(total, 2), "dias": dias, "candef": candef}
+
+
 def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
     doc = reg.document
     return RegistroView(
@@ -1877,6 +1913,7 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
         hora_descripcion=reg.hora_descripcion,
         hora_ext=reg.hora_ext,
         hora_match_method=reg.hora_match_method,
+        hora_candef=reg.hora_candef,
         confianza_pct=reg.confianza_pct,
         parte_firmado=bool(doc.firmado) if doc is not None else False,
         parte_firmante_rol=doc.firmante_rol if doc is not None else None,

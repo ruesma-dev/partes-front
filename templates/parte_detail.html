@@ -167,7 +167,7 @@
               </select>
               <div class="cell-sub combo-hora-current">
                 {% if r.hora_codigo %}{{ r.hora_codigo }} · {{ r.hora_descripcion or '' }}{% else %}—{% endif %}
-                {% if r.hora_match_method in ['categoria_normal', 'categoria_extra', 'categoria_extra_a_normal', 'extra_por_categoria', 'incidencia', 'incidencia_desc', 'ext_default', 'ext_first'] %}<span class="tag-auto" title="Asignado por matcheo determinista ({{ r.hora_match_method }})">auto</span>{% elif r.hora_match_method == 'codigo_propuesto' %}<span class="tag-ia" title="Propuesto por la IA - conviene revisar">IA</span>{% elif r.hora_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
+                {% if r.hora_match_method in ['categoria_normal', 'categoria_extra', 'categoria_extra_a_normal', 'extra_por_categoria', 'incidencia', 'incidencia_desc', 'ext_default', 'ext_first'] %}<span class="tag-auto" title="Asignado por matcheo determinista ({{ r.hora_match_method }})">auto</span>{% elif r.hora_match_method == 'codigo_propuesto' %}<span class="tag-ia" title="Propuesto por la IA - conviene revisar">IA</span>{% elif r.hora_match_method == 'manual' %}<span class="tag-manual">manual</span>{% elif r.hora_match_method == 'recurso' %}<span class="tag-recurso" title="Codigo impuesto por el recurso de Sigrid">recurso</span>{% elif r.hora_match_method == 'recurso_difiere' %}<span class="tag-difiere" title="El recurso impuso un codigo distinto al leido - revisar">&#9888; revisar</span>{% endif %}
               </div>
             </td>
             <td class="cell-partida">
@@ -189,6 +189,7 @@
               {% elif r.parte_estado == 'sin_recurso' %}<span class="badge muted-badge" title="No se localizo el recurso en Sigrid">Sin recurso</span>
               {% else %}<span class="muted">—</span>{% endif %}
               {% if r.recurso_cif %}<div class="cell-sub">DNI {{ r.recurso_cif }}{% if r.recurso_ide %} · rec {{ r.recurso_ide }}{% endif %}</div>{% endif %}
+              {% if r.hora_candef %}<div class="cell-sub">jornada {{ r.hora_candef|horas }} h</div>{% endif %}
             </td>
           </tr>
           {% endfor %}

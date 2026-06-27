@@ -33,6 +33,12 @@
     <span class="stat-label">Incidencias</span>
     <span class="stat-value">{{ detail.total_incidencias }}</span>
   </div>
+  {% if extras and extras.total_exceso %}
+  <div class="stat-card">
+    <span class="stat-label">Extra por jornada</span>
+    <span class="stat-value" title="Horas ordinarias por encima de la jornada por defecto del recurso ({{ extras.dias }} dias)">{{ extras.total_exceso|horas }}</span>
+  </div>
+  {% endif %}
   <div class="stat-card">
     <span class="stat-label">Trabajadores</span>
     <span class="stat-value">{{ detail.rows|length }}</span>

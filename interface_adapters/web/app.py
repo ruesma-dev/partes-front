@@ -46,7 +46,10 @@ from application.services.calendar_builder import (
 )
 from application.services.holiday_provider import HolidayProvider
 from config.settings import Settings
-from infrastructure.database.parte_repository import ParteReviewRepository
+from infrastructure.database.parte_repository import (
+    ParteReviewRepository,
+    extras_por_jornada,
+)
 from infrastructure.database.session_factory import SessionFactory
 from infrastructure.sigrid.sigrid_lookup_client import SigridLookupClient
 from infrastructure.graph.token_provider import GraphTokenProvider
@@ -409,6 +412,7 @@ def build_app(settings: Settings) -> FastAPI:
             "title": settings.app_title,
             "detail": detail,
             "calendar": calendar,
+            "extras": extras_por_jornada(detail.registros),
             "period_options": period_options,
             "selected_period": calendar.period_key if calendar else None,
             "period_mode": mode,
@@ -467,6 +471,7 @@ def build_app(settings: Settings) -> FastAPI:
             "detail": detail,
             "period_options": detail.period_options,
             "selected_period": detail.period_key,
+            "extras": extras_por_jornada(detail.registros),
             "period_mode": mode,
             "sigrid_enabled": settings.sigrid_lookup_enabled,
             "preview_enabled": settings.preview_enabled,
