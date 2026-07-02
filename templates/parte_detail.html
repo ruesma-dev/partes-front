@@ -190,6 +190,7 @@
               {% else %}<span class="muted">—</span>{% endif %}
               {% if r.recurso_cif %}<div class="cell-sub">DNI {{ r.recurso_cif }}{% if r.recurso_ide %} · rec {{ r.recurso_ide }}{% endif %}</div>{% endif %}
               {% if r.hora_candef %}<div class="cell-sub">jornada {{ r.hora_candef|horas }} h</div>{% endif %}
+              {% if r.recurso_precio_hora %}<div class="cell-sub">valor hora {{ ("%.2f"|format(r.recurso_precio_hora))|replace(".", ",") }} &euro;</div>{% endif %}
             </td>
           </tr>
           {% endfor %}

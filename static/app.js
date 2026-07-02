@@ -385,6 +385,93 @@
   }
 
   // ---------------------------------------------------------------- //
+  // Filtro por SELECCION de dias. Vista trabajador: casillas del
+  // calendario (.cal-pick[data-fecha]). Vista obra: celdas de la matriz
+  // (td.mx-pick[data-fecha][data-trabajador]). Marca con .filtered-day
+  // las filas de #lines-table que NO casan; se combina en AND con el
+  // filtro por columnas (que usa display inline) gracias al !important.
+  // ---------------------------------------------------------------- //
+  function _setupDaySelection(cells, table, keyFromCell, keyFromRow, stopProp) {
+    if (!cells.length || !table) return;
+    var tbody = table.querySelector("tbody");
+    if (!tbody) return;
+    var selected = new Set();
+    var badge = document.querySelector("[data-day-badge]");
+    var countEl = badge ? badge.querySelector("[data-count]") : null;
+    var clearBtn = document.querySelector("[data-day-clear]");
+
+    function apply() {
+      Array.prototype.forEach.call(tbody.rows, function (row) {
+        var pass = selected.size === 0 || selected.has(keyFromRow(row));
+        row.classList.toggle("filtered-day", !pass);
+      });
+      if (badge) {
+        if (selected.size === 0) {
+          badge.hidden = true;
+        } else {
+          badge.hidden = false;
+          if (countEl) countEl.textContent = String(selected.size);
+        }
+      }
+    }
+    function clearAll() {
+      selected.clear();
+      cells.forEach(function (c) { c.classList.remove("day-selected"); });
+      apply();
+    }
+    cells.forEach(function (cell) {
+      cell.addEventListener("click", function (ev) {
+        if (ev.target.closest("a, button, input, select")) return;
+        if (stopProp) ev.stopPropagation();
+        var key = keyFromCell(cell);
+        if (!key) return;
+        if (selected.has(key)) {
+          selected.delete(key);
+          cell.classList.remove("day-selected");
+        } else {
+          selected.add(key);
+          cell.classList.add("day-selected");
+        }
+        apply();
+      });
+    });
+    if (clearBtn) clearBtn.addEventListener("click", clearAll);
+  }
+
+  function wireDayFilters() {
+    var table = document.getElementById("lines-table");
+    if (!table) return;
+    // Vista TRABAJADOR: calendario .cal-grid, casillas .cal-pick[data-fecha].
+    var cal = document.querySelector(".cal-grid");
+    if (cal) {
+      var calCells = Array.prototype.slice.call(
+        cal.querySelectorAll(".cal-pick[data-fecha]"));
+      _setupDaySelection(
+        calCells, table,
+        function (c) { return c.getAttribute("data-fecha") || ""; },
+        function (r) { return r.getAttribute("data-fecha") || ""; },
+        false);
+    }
+    // Vista OBRA: matriz table.matrix, celdas td.mx-pick (trabajador + dia).
+    var matrix = document.querySelector("table.matrix");
+    if (matrix) {
+      var mxCells = Array.prototype.slice.call(
+        matrix.querySelectorAll("td.mx-pick[data-fecha]"));
+      _setupDaySelection(
+        mxCells, table,
+        function (c) {
+          return _norm(c.getAttribute("data-trabajador")) + "|" +
+                 (c.getAttribute("data-fecha") || "");
+        },
+        function (r) {
+          return _norm(r.getAttribute("data-trabajador")) + "|" +
+                 (r.getAttribute("data-fecha") || "");
+        },
+        true);
+    }
+  }
+
+  // ---------------------------------------------------------------- //
   // Ordenacion por columna al pinchar la cabecera (con flechita ▲/▼).
   // ---------------------------------------------------------------- //
   function _sortKey(cell) {
@@ -1811,6 +1898,7 @@
     document.querySelectorAll(".combo-obra").forEach(wireObraCombo);
     document.querySelectorAll("table.filterable:not(.matrix)").forEach(wireColumnTools);
     document.querySelectorAll("table").forEach(wireColumnFilters);
+    wireDayFilters();
     document.querySelectorAll("table.filterable:not(.matrix)").forEach(wireSortable);
     document.querySelectorAll(".combo-emp").forEach(wireEmpleadoCombo);
     wireNameEditToggles();

@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     service_version: str = Field("1.0.0", alias="SERVICE_VERSION")
     app_title: str = Field("Partes de Trabajo", alias="APP_TITLE")
     default_reviewer: str | None = Field(None, alias="DEFAULT_REVIEWER")
+    # Jornada por defecto y umbral de CanDefecto (deben coincidir con sv3):
+    # un CanDefecto <= candef_minimo_valido se considera NO informado en
+    # Sigrid y la vista muestra la jornada por defecto marcada "asignado".
+    jornada_por_defecto: float = Field(8.0, alias="JORNADA_POR_DEFECTO")
+    candef_minimo_valido: float = Field(2.0, alias="CANDEF_MINIMO_VALIDO")
 
     # --- Festivos del calendario --- #
     holidays_enabled: bool = Field(True, alias="HOLIDAYS_ENABLED")

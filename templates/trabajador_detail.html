@@ -12,6 +12,8 @@
         <span class="badge danger">Sin casar en Sigrid</span>
       {% endif %}
       {% if detail.dni %} · DNI {{ detail.dni }}{% endif %}
+      {% set _vh = (detail.registros | selectattr('recurso_precio_hora') | map(attribute='recurso_precio_hora') | first) %}
+      {% if _vh %} · <strong>valor hora {{ ("%.2f"|format(_vh))|replace(".", ",") }} &euro;</strong>{% endif %}
     </p>
   </div>
   <div class="header-actions">
@@ -35,6 +37,10 @@
   <div class="stat-card">
     <span class="stat-label">Horas extra</span>
     <span class="stat-value">{{ detail.horas_extra|horas }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Cantidad por defecto</span>
+    <span class="stat-value{% if candef_kpi.asignado %} candef-asignado{% endif %}" title="{% if candef_kpi.asignado %}Valor ASIGNADO por defecto. En Sigrid: {% if candef_kpi.sigrid is not none %}{{ candef_kpi.sigrid|horas }}{% else %}sin dato{% endif %} (<= minimo){% else %}CanDefecto del recurso en Sigrid{% endif %}">{{ candef_kpi.valor|horas }}{% if candef_kpi.asignado %} <span class="tag-asignado">asignado</span>{% endif %}</span>
   </div>
   <div class="stat-card">
     <span class="stat-label">Incidencias</span>
@@ -88,9 +94,10 @@
 
     {% for week in calendar.weeks %}
       {% for day in week %}
-      <div class="cal-day{% if not day.in_period %} cal-out{% endif %}{% if day.in_period and (day.is_weekend or day.is_holiday) %} cal-off{% endif %}"
+      <div class="cal-day{% if not day.in_period %} cal-out{% endif %}{% if day.in_period and (day.is_weekend or day.is_holiday) %} cal-off{% endif %}{% if day.in_period %} cal-pick{% endif %}{% if day.in_period and day.date_iso in dias_incompletos %} cal-warn{% endif %}"
+           {% if day.in_period %}data-fecha="{{ day.date_iso }}"{% endif %}
            {% if day.is_holiday and day.holiday_name %}title="{{ day.holiday_name }}"{% endif %}>
-        <span class="cal-num">{{ day.day }}</span>
+        <span class="cal-num">{{ day.day }}</span>{% if day.in_period and day.date_iso in dias_incompletos %}<span class="cal-warn-mark" title="Jornada ordinaria por debajo de la cantidad por defecto">⚠</span>{% endif %}
         {% if day.in_period %}
           {% if day.is_holiday %}<span class="cal-fest" title="{{ day.holiday_name }}">●</span>{% endif %}
           {% if day.obras %}
@@ -128,6 +135,10 @@
 
 <div class="panel">
   <div class="panel-header"><h2>Registros horarios</h2></div>
+  <div class="day-filter-bar" data-day-badge hidden>
+    <span>Filtrando por <strong><span data-count>0</span></strong> día(s) seleccionados en el calendario.</span>
+    <button type="button" class="btn secondary small" data-day-clear>Quitar filtro</button>
+  </div>
   <div class="table-scroll">
   <table class="table lines-table filterable" id="lines-table">
     <thead>
@@ -158,7 +169,7 @@
     </thead>
     <tbody>
       {% for r in detail.registros %}
-      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}" data-obra-ide="{{ r.obra_ide if r.obra_ide is not none else '' }}">
+      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}" data-obra-ide="{{ r.obra_ide if r.obra_ide is not none else '' }}" data-fecha="{{ r.fecha or '' }}">
         <td class="cell-fecha">
           <input type="date" class="fecha-edit cell-edit"
                  data-document-id="{{ r.document_id }}"
@@ -188,7 +199,7 @@
           {% elif r.hora_ext == 1 or r.tipo_hora == 'extra' %}
             <span class="badge extra">Extra</span>
           {% else %}
-            <span class="badge normal">Ordinaria</span>
+            <span class="badge normal">Ordinaria</span>{% if r.fecha in dias_incompletos %} <span class="badge warn" title="Jornada ordinaria por debajo de la cantidad por defecto">⚠</span>{% endif %}
           {% endif %}
         </td>
         <td class="num cell-horas">
@@ -224,6 +235,7 @@
           {% else %}<span class="muted">—</span>{% endif %}
           {% if r.recurso_cif %}<div class="cell-sub">DNI {{ r.recurso_cif }}{% if r.recurso_ide %} · rec {{ r.recurso_ide }}{% endif %}</div>{% endif %}
               {% if r.hora_candef %}<div class="cell-sub">jornada {{ r.hora_candef|horas }} h</div>{% endif %}
+              {% if r.recurso_precio_hora %}<div class="cell-sub">valor hora {{ ("%.2f"|format(r.recurso_precio_hora))|replace(".", ",") }} &euro;</div>{% endif %}
         </td>
         <td>
           {% if r.parte_firmado %}

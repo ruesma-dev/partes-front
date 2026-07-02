@@ -407,11 +407,52 @@ def build_app(settings: Settings) -> FastAPI:
                 mode=mode,
             )
 
+        # Cantidad por defecto (CanDefecto) del recurso, para diagnostico.
+        # Se distingue 0 de None (un 0 significa que Sigrid no tiene la
+        # jornada informada; el calculo de sv3 usa 8 en ese caso).
+        candef_recurso = sorted({
+            float(r.hora_candef)
+            for r in detail.registros
+            if r.hora_candef is not None
+        })
+        # Presentacion del CanDefecto: si Sigrid no lo informa o es <= el
+        # minimo, se muestra la jornada por defecto (no la de Sigrid) y se
+        # marca como valor "asignado".
+        _cd_real = min(candef_recurso) if candef_recurso else None
+        if _cd_real is None or _cd_real <= settings.candef_minimo_valido:
+            candef_kpi = {
+                "valor": settings.jornada_por_defecto,
+                "asignado": True,
+                "sigrid": _cd_real,
+            }
+        else:
+            candef_kpi = {
+                "valor": _cd_real, "asignado": False, "sigrid": _cd_real,
+            }
+
+        # Dias LABORABLES con jornada ordinaria incompleta: horas
+        # ordinarias del dia por debajo del CanDefecto efectivo (el de
+        # Sigrid, u 8 si era <= minimo). Se excluyen findes/festivos y
+        # los dias sin horas ordinarias (0).
+        candef_efectivo = candef_kpi["valor"]
+        dias_incompletos: set[str] = set()
+        if calendar is not None:
+            for _week in calendar.weeks:
+                for _day in _week:
+                    if (_day.in_period and not _day.is_weekend
+                            and not _day.is_holiday
+                            and 0.0 < (_day.normal_h or 0.0)
+                            < candef_efectivo - 1e-9):
+                        dias_incompletos.add(_day.date_iso)
+
         context = {
             "request": request,
             "title": settings.app_title,
             "detail": detail,
             "calendar": calendar,
+            "candef_recurso": candef_recurso,
+            "candef_kpi": candef_kpi,
+            "dias_incompletos": dias_incompletos,
             "extras": extras_por_jornada(detail.registros),
             "period_options": period_options,
             "selected_period": calendar.period_key if calendar else None,
@@ -465,6 +506,31 @@ def build_app(settings: Settings) -> FastAPI:
         )
         if detail is None:
             raise HTTPException(status_code=404, detail="Obra no encontrada")
+
+        # Avisos de jornada incompleta por (trabajador, dia): horas
+        # ordinarias EN ESTA OBRA por debajo del CanDefecto efectivo del
+        # recurso (u 8 si era <= minimo). Se excluyen findes/festivos.
+        _cd_min = settings.candef_minimo_valido
+        _cd_jor = settings.jornada_por_defecto
+        _candef_real: dict[str, float] = {}
+        for _r in detail.registros:
+            if _r.hora_candef is None:
+                continue
+            _nom = _r.trabajador_nombre or ""
+            _v = float(_r.hora_candef)
+            if _nom not in _candef_real or _v < _candef_real[_nom]:
+                _candef_real[_nom] = _v
+        incompletos: set[str] = set()
+        for _row in detail.rows:
+            _real = _candef_real.get(_row.nombre or "")
+            _eff = _cd_jor if (_real is None or _real <= _cd_min) else _real
+            for _c in _row.cells:
+                if _c.is_weekend or _c.is_holiday:
+                    continue
+                if 0.0 < (_c.normal or 0.0) < _eff - 1e-9:
+                    incompletos.add((_row.nombre or "") + "|"
+                                    + (_c.date_iso or ""))
+
         context = {
             "request": request,
             "title": settings.app_title,
@@ -472,6 +538,9 @@ def build_app(settings: Settings) -> FastAPI:
             "period_options": detail.period_options,
             "selected_period": detail.period_key,
             "extras": extras_por_jornada(detail.registros),
+            "candef_minimo": settings.candef_minimo_valido,
+            "jornada_defecto": settings.jornada_por_defecto,
+            "incompletos": incompletos,
             "period_mode": mode,
             "sigrid_enabled": settings.sigrid_lookup_enabled,
             "preview_enabled": settings.preview_enabled,

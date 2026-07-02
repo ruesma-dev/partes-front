@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session, sessionmaker
 
 
@@ -39,7 +40,13 @@ class SessionFactory:
             ).scalar()
             if not exists:
                 safe_db_name = self._target_database_name.replace('"', '""')
-                connection.execute(text(f'CREATE DATABASE "{safe_db_name}"'))
+                try:
+                    connection.execute(
+                        text(f'CREATE DATABASE "{safe_db_name}"')
+                    )
+                except (ProgrammingError, IntegrityError):
+                    # Otra instancia creo la base entre el SELECT y el CREATE.
+                    pass
         admin_engine.dispose()
 
     def _ensure_database_and_engine(self) -> None:

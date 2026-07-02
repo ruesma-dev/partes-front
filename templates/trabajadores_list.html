@@ -91,7 +91,7 @@
         <td class="num">{% if w.num_incidencias %}<span class="badge warn">{{ w.num_incidencias }}</span>{% else %}—{% endif %}</td>
         <td>
           {% if w.matched %}
-            <span class="badge ok">{{ w.codigo or "casado" }}</span>
+            <span class="badge ok">{% if w.dni %}DNI {{ w.dni }}{% else %}casado{% endif %}</span>
           {% else %}
             <span class="badge danger">sin casar</span>
           {% endif %}

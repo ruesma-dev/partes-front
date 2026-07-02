@@ -107,6 +107,7 @@ class RegistroView:
     hora_ext: Optional[int]
     hora_match_method: Optional[str]
     hora_candef: Optional[float]
+    recurso_precio_hora: Optional[float]
     confianza_pct: Optional[float]
     # Datos del parte al que pertenece (para mostrar contexto/firma).
     parte_firmado: bool
@@ -437,6 +438,7 @@ class ParteReviewRepository:
                     "recurso_ide INTEGER", "recurso_cif VARCHAR(64)",
                     "hmo_ide INTEGER", "parte_estado VARCHAR(16)",
                     "hora_candef DOUBLE PRECISION",
+                    "recurso_precio_hora DOUBLE PRECISION",
                     "deleted_at_utc VARCHAR(64)", "deleted_by VARCHAR(255)",
                 ):
                     conn.execute(text(
@@ -1914,6 +1916,7 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
         hora_ext=reg.hora_ext,
         hora_match_method=reg.hora_match_method,
         hora_candef=reg.hora_candef,
+        recurso_precio_hora=reg.recurso_precio_hora,
         confianza_pct=reg.confianza_pct,
         parte_firmado=bool(doc.firmado) if doc is not None else False,
         parte_firmante_rol=doc.firmante_rol if doc is not None else None,

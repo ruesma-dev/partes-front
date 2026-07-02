@@ -99,7 +99,8 @@
             {% if not row.matched %}<span class="badge danger mx-badge">sin casar</span>{% endif %}
           </td>
           {% for c in row.cells %}
-          <td class="mx-cell{% if c.is_weekend %} mx-we{% endif %}{% if c.is_holiday %} mx-hol{% endif %}{% if c.has_inc %} mx-inc{% endif %}{% if c.extra and not c.normal %} mx-extra{% endif %}{% if preview_enabled and c.tiene_pdf %} mx-cell-pdf{% endif %}"
+          <td class="mx-cell{% if c.is_weekend %} mx-we{% endif %}{% if c.is_holiday %} mx-hol{% endif %}{% if c.has_inc %} mx-inc{% endif %}{% if c.extra and not c.normal %} mx-extra{% endif %}{% if preview_enabled and c.tiene_pdf %} mx-cell-pdf{% endif %}{% if c.label %} mx-pick{% endif %}{% if ((row.nombre or '') ~ '|' ~ (c.date_iso or '')) in incompletos %} mx-warn{% endif %}"
+              {% if c.label %}data-fecha="{{ c.date_iso }}" data-trabajador="{{ row.nombre }}"{% endif %}
               {% if preview_enabled and c.tiene_pdf %}data-parte-pdf="{{ c.document_id }}" data-parte-title="Parte · {{ detail.obra_codigo or detail.obra_nombre or '' }} · {{ c.date_iso }} · {{ row.nombre }}" title="Ver parte del {{ c.date_iso }}"{% endif %}>{{ c.label }}</td>
           {% endfor %}
           <td class="mx-tot">{% if row.total_extra %}{{ row.total_normal|horas }}+{{ row.total_extra|horas }}{% elif row.total_normal %}{{ row.total_normal|horas }}{% else %}—{% endif %}</td>
@@ -124,6 +125,10 @@
 
 <div class="panel">
   <div class="panel-header"><h2>Lineas del periodo</h2></div>
+  <div class="day-filter-bar" data-day-badge hidden>
+    <span>Filtrando por <strong><span data-count>0</span></strong> casilla(s) (trabajador · día) de la matriz.</span>
+    <button type="button" class="btn secondary small" data-day-clear>Quitar filtro</button>
+  </div>
   {% if detail.registros %}
   <div class="table-scroll">
   <table class="table lines-table filterable" id="lines-table">
@@ -134,6 +139,7 @@
         <th>Categoria</th>
         <th>Tipo</th>
         <th class="num">Horas</th>
+        <th class="num">Cant. def.</th>
         <th>Codigo de hora (Sigrid)</th>
         <th>Partida (imputacion)</th>
         <th>Recurso / Parte</th>
@@ -146,6 +152,7 @@
         <th><input class="col-filter" type="text" placeholder="Filtrar…"></th>
         <th><input class="col-filter" type="text" placeholder="Ordin./Extra…"></th>
         <th><input class="col-filter" type="text" placeholder="…"></th>
+        <th></th>
         <th><input class="col-filter" type="text" placeholder="Codigo…"></th>
         <th><input class="col-filter" type="text" placeholder="Partida…"></th>
         <th><input class="col-filter" type="text" placeholder="Recurso…"></th>
@@ -155,7 +162,7 @@
     </thead>
     <tbody>
       {% for r in detail.registros %}
-      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}" data-obra-ide="{{ detail.obra_ide if detail.obra_ide is defined and detail.obra_ide is not none else '' }}">
+      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}" data-obra-ide="{{ detail.obra_ide if detail.obra_ide is defined and detail.obra_ide is not none else '' }}" data-fecha="{{ r.fecha or '' }}" data-trabajador="{{ r.trabajador_nombre or '' }}">
         <td class="cell-fecha">
           <input type="date" class="fecha-edit cell-edit"
                  data-document-id="{{ r.document_id }}"
@@ -180,7 +187,7 @@
           {% elif r.hora_ext == 1 or r.tipo_hora == 'extra' %}
             <span class="badge extra">Extra</span>
           {% else %}
-            <span class="badge normal">Ordinaria</span>
+            <span class="badge normal">Ordinaria</span>{% if ((r.trabajador_nombre or '') ~ '|' ~ (r.fecha or '')) in incompletos %} <span class="badge warn" title="Jornada ordinaria (en esta obra) por debajo de la cantidad por defecto">⚠</span>{% endif %}
           {% endif %}
         </td>
         <td class="num cell-horas">
@@ -188,6 +195,7 @@
                  data-registro-id="{{ r.id }}"
                  value="{{ r.horas if r.horas is not none else '' }}">
         </td>
+        <td class="num cell-candef{% if r.hora_candef is none or r.hora_candef <= candef_minimo %} candef-asignado{% endif %}" title="{% if r.hora_candef is none or r.hora_candef <= candef_minimo %}Asignado por defecto. En Sigrid: {% if r.hora_candef is not none %}{{ r.hora_candef|horas }}{% else %}sin dato{% endif %}{% else %}CanDefecto del recurso en Sigrid{% endif %}">{% if r.hora_candef is none or r.hora_candef <= candef_minimo %}{{ jornada_defecto|horas }} <span class="tag-asignado">asig.</span>{% else %}{{ r.hora_candef|horas }}{% endif %}</td>
         <td>
           <select class="combo combo-hora" data-registro-id="{{ r.id }}"
                   data-current="{{ r.hora_ide if r.hora_ide is not none else '' }}">

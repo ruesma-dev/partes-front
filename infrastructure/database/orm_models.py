@@ -193,6 +193,7 @@ class ParteRegistroOrm(Base):
     hora_precio_nomina: Mapped[float | None] = mapped_column(Float)
     # CanDefecto (jornada laborable por defecto del recurso) escrito por sv3.
     hora_candef: Mapped[float | None] = mapped_column(Float)
+    recurso_precio_hora: Mapped[float | None] = mapped_column(Float)
     hora_match_method: Mapped[str | None] = mapped_column(String(24))
 
     confianza_pct: Mapped[float | None] = mapped_column(Float)
