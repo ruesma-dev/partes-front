@@ -440,6 +440,8 @@ class ParteReviewRepository:
                     "hora_candef DOUBLE PRECISION",
                     "recurso_precio_hora DOUBLE PRECISION",
                     "deleted_at_utc VARCHAR(64)", "deleted_by VARCHAR(255)",
+                    "horas_orig DOUBLE PRECISION",
+                    "extra_auto BOOLEAN NOT NULL DEFAULT false",
                 ):
                     conn.execute(text(
                         "ALTER TABLE parte_registros ADD COLUMN IF NOT EXISTS "
@@ -1773,6 +1775,8 @@ class ParteReviewRepository:
         dias: list[str], horas_ordinaria: float, horas_extra: float,
         partida_ide: int | None = None, partida_cod: str | None = None,
         partida_res: str | None = None, partida_capitulo: str | None = None,
+        partida_match_method: str | None = None,
+        partida_match_score: float | None = None,
         hora_normal=None, hora_extra=None,
         by: str | None = None,
     ) -> dict:
@@ -1786,7 +1790,9 @@ class ParteReviewRepository:
         tipos: list[tuple[str, float]] = []
         if horas_ordinaria and float(horas_ordinaria) > 0:
             tipos.append(("normal", float(horas_ordinaria)))
-        if horas_extra and float(horas_extra) > 0:
+        # La extra admite valores NEGATIVOS (ajuste de jornada: viernes
+        # tipico ordinaria 8 y extra -2); solo se descarta el 0.
+        if horas_extra and abs(float(horas_extra)) > 1e-9:
             tipos.append(("extra", float(horas_extra)))
         if not tipos:
             return {"documentos": 0, "lineas": 0, "error": "Sin horas que crear."}
@@ -1852,8 +1858,15 @@ class ParteReviewRepository:
                         hora_match_method=(hm.method if hm else None),
                         partida_ide=partida_ide, partida_cod=partida_cod,
                         partida_res=partida_res, partida_capitulo=partida_capitulo,
-                        partida_match_method=("manual" if partida_ide else None),
-                        partida_match_score=(1.0 if partida_ide else None),
+                        partida_match_method=(
+                            partida_match_method
+                            or ("manual" if partida_ide else None)
+                        ),
+                        partida_match_score=(
+                            partida_match_score
+                            if partida_match_score is not None
+                            else (1.0 if partida_ide else None)
+                        ),
                     ))
                     nli += 1
                     lineas += 1

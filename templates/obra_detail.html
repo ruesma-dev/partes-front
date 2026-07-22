@@ -215,7 +215,7 @@
               {% elif r.partida_match_method == 'auto_categoria' %}<span class="tag-auto" title="Casado por la categoria">auto</span>
               {% elif r.partida_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
             </div>
-          {% else %}<span class="muted">— sin partida —</span>{% endif %}
+          {% else %}<span class="muted partida-warn" title="No se encontró partida ni por nombre ni por categoría en CI. No es obligatoria; puedes asignarla a mano.">⚠ sin partida</span>{% endif %}
         </td>
         <td class="cell-recurso">
           {% if r.parte_estado == 'ok' %}<span class="badge ok" title="Existe parte de trabajo (hmo {{ r.hmo_ide }})">Parte ✓</span>

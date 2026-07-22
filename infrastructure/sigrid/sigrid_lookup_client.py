@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dc_replace
 from typing import Any
 
 import httpx
@@ -52,12 +52,17 @@ ORDER BY con.cod
 # trabajadores sin casar contra el maestro de Sigrid.
 _SQL_EMPLEADOS = """\
 SELECT
-    con.ide AS ide,
-    con.cod AS codigo,
-    emp.res AS nombre,
-    emp.dni AS dni
+    con.ide       AS ide,
+    con.cod       AS codigo,
+    emp.res       AS nombre,
+    emp.dni       AS dni,
+    auxrestip.res AS categoria,
+    reshor.candef AS candef
 FROM emp
 JOIN con ON emp.ide = con.ide
+LEFT JOIN res ON res.conide = emp.ide
+LEFT JOIN auxrestip ON auxrestip.ide = res.restipide
+LEFT JOIN reshor ON reshor.reside = res.ide AND reshor.horide = res.horide
 """
 
 
@@ -101,6 +106,8 @@ class EmpleadoOption:
     codigo: str | None
     nombre: str | None
     dni: str | None
+    categoria: str | None = None
+    candef: float | None = None
 
 
 @dataclass
@@ -192,19 +199,39 @@ class SigridLookupClient:
             sql=_SQL_EMPLEADOS, parameters=[], label="empleados"
         )
         out: list[EmpleadoOption] = []
+        por_ide: dict[int, EmpleadoOption] = {}
         for row in rows:
             rm = dict(zip(columns, row))
             ide = _opt_int(rm.get("ide"))
             if ide is None:
                 continue
-            out.append(
-                EmpleadoOption(
-                    ide=ide,
-                    codigo=_opt_str(rm.get("codigo")),
-                    nombre=_opt_str(rm.get("nombre")),
-                    dni=_opt_str(rm.get("dni")),
-                )
+            categoria = _opt_str(rm.get("categoria"))
+            candef = _opt_float(rm.get("candef"))
+            previo = por_ide.get(ide)
+            if previo is not None:
+                # El JOIN con res/reshor puede duplicar filas (varios
+                # recursos por empleado): completamos categoria/candef si
+                # la fila nueva los aporta (dataclass frozen -> replace).
+                cambios = {}
+                if previo.categoria is None and categoria:
+                    cambios["categoria"] = categoria
+                if previo.candef is None and candef is not None:
+                    cambios["candef"] = candef
+                if cambios:
+                    nuevo = dc_replace(previo, **cambios)
+                    por_ide[ide] = nuevo
+                    out[out.index(previo)] = nuevo
+                continue
+            emp = EmpleadoOption(
+                ide=ide,
+                codigo=_opt_str(rm.get("codigo")),
+                nombre=_opt_str(rm.get("nombre")),
+                dni=_opt_str(rm.get("dni")),
+                categoria=categoria,
+                candef=candef,
             )
+            por_ide[ide] = emp
+            out.append(emp)
         logger.info("%s empleados -> %s filas", _LOG_PREFIX, len(out))
         return out
 

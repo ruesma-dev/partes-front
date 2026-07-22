@@ -180,7 +180,7 @@
                   {% elif r.partida_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
                 </div>
               {% else %}
-                <span class="muted">— sin partida —</span>
+                <span class="muted partida-warn" title="No se encontró partida ni por nombre ni por categoría en CI. No es obligatoria; puedes asignarla a mano.">⚠ sin partida</span>
               {% endif %}
             </td>
             <td class="cell-recurso">

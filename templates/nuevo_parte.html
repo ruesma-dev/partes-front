@@ -37,7 +37,7 @@
 
     <div class="field">
       <label>Categoría</label>
-      <input type="text" id="categoria" class="input" placeholder="Capataz, Oficial, Encargado…" autocomplete="off">
+      <input type="text" id="categoria" class="input input-locked" placeholder="Se rellena al elegir trabajador" autocomplete="off" readonly tabindex="-1" title="La categoría viene del trabajador en Sigrid">
     </div>
 
     <div class="field">
@@ -53,11 +53,11 @@
     <div class="field-row">
       <div class="field">
         <label>Horas ordinarias</label>
-        <input type="number" id="horas-ord" class="input" step="0.5" min="0" value="8">
+        <input type="number" id="horas-ord" class="input" step="0.5" min="0" value="8" title="Se sugiere la jornada por defecto del trabajador; editable">
       </div>
       <div class="field">
         <label>Horas extra</label>
-        <input type="number" id="horas-extra" class="input" step="0.5" min="0" value="0">
+        <input type="number" id="horas-extra" class="input" step="0.5" value="0" title="Admite negativos (p. ej. viernes: 8 y -2)">
       </div>
     </div>
 

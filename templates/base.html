@@ -94,7 +94,7 @@
         </div>
         <div class="field">
           <label>Categoría</label>
-          <input type="text" id="addline-categoria" class="input" placeholder="Capataz, Oficial…" autocomplete="off">
+          <input type="text" id="addline-categoria" class="input input-locked" placeholder="Se rellena al elegir trabajador" autocomplete="off" readonly tabindex="-1" title="La categoría viene del trabajador en Sigrid">
         </div>
         <div class="field">
           <label>Partida (imputación)</label>
@@ -111,7 +111,7 @@
         </div>
         <div class="field-row">
           <div class="field"><label>Ordinarias</label><input type="number" id="addline-ord" class="input" step="0.5" min="0" value="8"></div>
-          <div class="field"><label>Extra</label><input type="number" id="addline-extra" class="input" step="0.5" min="0" value="0"></div>
+          <div class="field"><label>Extra</label><input type="number" id="addline-extra" class="input" step="0.5" value="0" title="Admite negativos (p. ej. viernes: 8 y -2)"></div>
         </div>
         <p id="addline-status" class="form-status" hidden></p>
       </div>

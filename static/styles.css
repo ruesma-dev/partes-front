@@ -773,3 +773,17 @@ tr.row-selected > td:first-child { box-shadow: inset 3px 0 0 var(--brand, #9f284
   box-shadow: 0 12px 30px rgba(0, 0, 0, .16); padding: 4px; overflow-y: auto;
 }
 .partida-editor .pe-host { position: relative; }
+
+/* Campo bloqueado (solo lectura): la categoria viene de Sigrid. */
+.input.input-locked {
+  background: #f2f4f7; color: #667085; cursor: not-allowed;
+  border-color: var(--border, #d0d4da);
+}
+.input.input-locked:focus { outline: none; box-shadow: none; }
+
+/* Linea sin partida casada: aviso ambar (no es obligatoria). */
+.partida-warn {
+  color: #b54708; background: #fffaeb;
+  border: 1px solid #fedf89; border-radius: 6px;
+  padding: 1px 7px; font-size: 12px; white-space: nowrap;
+}

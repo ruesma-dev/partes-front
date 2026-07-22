@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 import time
+import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
@@ -121,6 +123,32 @@ def _preview_error_html(*, title: str, message: str, external_url: str | None) -
  a{{color:#9f2842;text-decoration:none;font-weight:600}}
 </style></head>
 <body><div class="card"><h1>{safe_title}</h1><p>{safe_message}</p>{link}</div></body></html>"""
+
+
+def _content_disposition_inline(filename: str | None) -> str:
+    """Content-Disposition 'inline' SEGURO para proxies estrictos.
+
+    El sidecar de Easy Auth (proxy .NET delante del Container App) rechaza
+    cabeceras HTTP con bytes no-ASCII y responde un 500 seco AUNQUE la app
+    haya devuelto 200. Los adjuntos reales traen nombres con tildes/enye/
+    grado ("PARTE Nº4 JOSÉ.pdf"), asi que: filename= con version ASCII
+    saneada + filename*=UTF-8'' con el nombre real percent-encoded
+    (RFC 5987), que es puro ASCII y todos los navegadores modernos leen.
+    """
+    raw = (filename or "").strip() or "parte.pdf"
+    ascii_name = (
+        unicodedata.normalize("NFKD", raw)
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    ascii_name = re.sub(r'[^A-Za-z0-9._ ()-]+', "_", ascii_name).strip()
+    if not ascii_name or ascii_name in {".", ".."}:
+        ascii_name = "parte.pdf"
+    utf8_quoted = quote(raw, safe="")
+    return (
+        f'inline; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{utf8_quoted}"
+    )
 
 
 def _guess_pdf_media_type(name: str | None) -> str:
@@ -919,11 +947,19 @@ def build_app(settings: Settings) -> FastAPI:
                 {"ok": False, "error": f"Error consultando Sigrid: {exc}",
                  "items": []}
             )
+        def _sugerida(cd: float | None) -> float:
+            # CanDefecto no valido (vacio o <= minimo) -> jornada por defecto
+            # (mismo umbral que sv3 al reclasificar extras).
+            if cd is None or float(cd) <= settings.candef_minimo_valido:
+                return settings.jornada_por_defecto
+            return float(cd)
+
         return JSONResponse({
             "ok": True,
             "items": [
                 {"ide": e.ide, "codigo": e.codigo, "nombre": e.nombre,
-                 "dni": e.dni}
+                 "dni": e.dni, "categoria": e.categoria, "candef": e.candef,
+                 "jornada_sugerida": _sugerida(e.candef)}
                 for e in items
             ],
         })
@@ -959,7 +995,27 @@ def build_app(settings: Settings) -> FastAPI:
     # ---------------- Visor del PDF del parte ------------------------ #
     @app.get("/partes/{document_id}/preview", response_class=Response)
     def parte_preview(document_id: str) -> Response:
-        ref = repository.get_sharepoint_ref(document_id)
+        try:
+            ref = repository.get_sharepoint_ref(document_id)
+        except Exception as exc:  # noqa: BLE001
+            # Un fallo al LEER la referencia en la BD (p.ej. desajuste de
+            # esquema) devolvia un HTTP 500 mudo. Se captura para mostrar el
+            # detalle y dejar rastro en el log en lugar de romper el visor.
+            logger.exception(
+                "[preview] fallo leyendo la referencia SharePoint "
+                "document_id=%s", document_id,
+            )
+            return HTMLResponse(
+                _preview_error_html(
+                    title="Error accediendo al parte",
+                    message=(
+                        "No se pudo leer la referencia del parte en la base "
+                        f"de datos: {type(exc).__name__}: {exc}"
+                    ),
+                    external_url=None,
+                ),
+                status_code=500,
+            )
         if ref is None:
             raise HTTPException(status_code=404, detail="Parte no encontrado")
 
@@ -1020,7 +1076,7 @@ def build_app(settings: Settings) -> FastAPI:
                 content=resp.content,
                 media_type=media,
                 headers={
-                    "Content-Disposition": f'inline; filename="{fname}"',
+                    "Content-Disposition": _content_disposition_inline(fname),
                     "Cache-Control": "no-store",
                 },
             )
@@ -1325,6 +1381,42 @@ def build_app(settings: Settings) -> FastAPI:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[partes-nuevo] match codigo hora fallo: %r", exc)
 
+        # Casar la PARTIDA en el momento de crear (mismo motor que sv3):
+        # primero por NOMBRE del trabajador en la descripcion, luego por
+        # CATEGORIA, y SOLO en el capitulo CI. Antes esto quedaba pendiente
+        # de la siguiente conciliacion de sv3 (al persistir un parte por
+        # email), de ahi que registros iguales salieran unos casados y otros
+        # en blanco. Si el usuario eligio partida a mano, se respeta.
+        partida_ide = _as_int(data.get("partida_ide"))
+        partida_cod = data.get("partida_cod") or None
+        partida_res_txt = data.get("partida_res") or None
+        partida_capitulo = data.get("partida_capitulo") or None
+        partida_metodo = "manual" if partida_ide else None
+        partida_score = 1.0 if partida_ide else None
+        obra_ide_int = _as_int(data.get("obra_ide"))
+        if partida_ide is None and sigrid_client is not None and obra_ide_int:
+            try:
+                from application.services.partida_catalog import (
+                    build_arbol_partidas,
+                    partidas_hoja,
+                )
+                from application.services.partida_matcher import match_partida
+                filas = sigrid_client.fetch_partidas_obra(obra_ide_int)
+                nodos = build_arbol_partidas(filas)
+                candidatas = partidas_hoja(nodos, categoria="CI")
+                m = match_partida(categoria_txt or None, nombre, candidatas)
+                if m is not None:
+                    partida_ide = m.partida.ide
+                    partida_cod = m.partida.cod
+                    partida_res_txt = m.partida.res
+                    partida_capitulo = m.partida.categoria
+                    partida_metodo = m.metodo
+                    partida_score = m.score
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "[partes-nuevo] casado de partida fallo: %r", exc
+                )
+
         res = repository.crear_parte_manual(
             obra_ide=_as_int(data.get("obra_ide")),
             obra_codigo=(data.get("obra_codigo") or None),
@@ -1338,10 +1430,12 @@ def build_app(settings: Settings) -> FastAPI:
             dias=[str(d) for d in dias],
             horas_ordinaria=_f(data.get("horas_ordinaria")),
             horas_extra=_f(data.get("horas_extra")),
-            partida_ide=_as_int(data.get("partida_ide")),
-            partida_cod=(data.get("partida_cod") or None),
-            partida_res=(data.get("partida_res") or None),
-            partida_capitulo=(data.get("partida_capitulo") or None),
+            partida_ide=partida_ide,
+            partida_cod=partida_cod,
+            partida_res=partida_res_txt,
+            partida_capitulo=partida_capitulo,
+            partida_match_method=partida_metodo,
+            partida_match_score=partida_score,
             hora_normal=hora_normal,
             hora_extra=hora_extra,
             by=settings.default_reviewer,

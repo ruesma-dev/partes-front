@@ -1218,6 +1218,12 @@
         document.getElementById("emp-codigo").value = e.codigo || "";
         document.getElementById("emp-nombre").value = e.nombre || "";
         document.getElementById("emp-dni").value = e.dni || "";
+        // Categoria: viene del trabajador en Sigrid (campo bloqueado).
+        document.getElementById("categoria").value = e.categoria || "";
+        // Sugerir la jornada por defecto del trabajador (editable).
+        if (e.jornada_sugerida != null) {
+          document.getElementById("horas-ord").value = e.jornada_sugerida;
+        }
         updateBtn();
       });
 
@@ -1345,6 +1351,10 @@
         g("addline-emp-codigo").value = e.codigo || "";
         g("addline-emp-nombre").value = e.nombre || "";
         g("addline-emp-dni").value = e.dni || "";
+        g("addline-categoria").value = e.categoria || "";
+        if (e.jornada_sugerida != null) {
+          g("addline-ord").value = e.jornada_sugerida;
+        }
       });
     _bindClick("[data-add-line]", function (btn) { open(btn); });
     g("addline-close").addEventListener("click", close);
