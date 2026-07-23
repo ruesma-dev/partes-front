@@ -120,6 +120,8 @@ class RegistroView:
     # True si la fecha del parte es posterior al mes en curso de su registro.
     es_futuro: bool = False
     # --- Casado de PARTIDA (presupuesto) por sv3 --- #
+    # Codigo de partida LEIDO del parte (J.310 rev. 1); None en rev. 0.
+    partida_leida: Optional[str] = None
     partida_cod: Optional[str] = None
     partida_res: Optional[str] = None
     partida_capitulo: Optional[str] = None         # CD/CI/CP
@@ -241,6 +243,16 @@ class ObraMatrixCell:
     document_id: Optional[str] = None
     tiene_pdf: bool = False
     es_futuro: bool = False
+    # Edicion inline desde la celda: id del registro ORDINARIO / EXTRA si
+    # ese (trabajador, dia) tiene EXACTAMENTE uno de cada tipo; None si hay
+    # cero o varios (en ese caso se edita desde 'Lineas del periodo').
+    edit_normal_id: Optional[int] = None
+    edit_extra_id: Optional[int] = None
+    normal_multi: bool = False
+    extra_multi: bool = False
+    # TODAS las lineas de horas de la celda, para el editor inline:
+    # [{'id':..,'t':'n'|'e','h':horas,'p':partida|None}, ...]
+    regs: list = field(default_factory=list)
 
 
 @dataclass
@@ -251,6 +263,12 @@ class ObraMatrixRow:
     cells: list[ObraMatrixCell]
     total_normal: float
     total_extra: float
+    # Categoria predominante del trabajador en el periodo (nueva columna).
+    categoria: Optional[str] = None
+    # Recurso del trabajador y si TIENE codigo de hora extra en Sigrid.
+    # Si no lo tiene, sus horas NO cuentan en totales (KPIs, dia, obra).
+    recurso_ide: Optional[int] = None
+    tiene_extra: bool = True
 
 
 @dataclass
@@ -369,11 +387,13 @@ def _cell_label(normal: float, extra: float, inc_codes: list[str]) -> str:
     """Etiqueta de celda de la matriz: '8+2', '8', '+2', 'V', o combinada."""
     parts: list[str] = []
     if normal and extra:
-        parts.append(f"{_fmt_h(normal)}+{_fmt_h(extra)}")
+        # Extra negativa: '8-1' (no '8+-1'); _fmt_h ya emite el signo.
+        sep = "+" if extra > 0 else ""
+        parts.append(f"{_fmt_h(normal)}{sep}{_fmt_h(extra)}")
     elif normal:
         parts.append(_fmt_h(normal))
     elif extra:
-        parts.append(f"+{_fmt_h(extra)}")
+        parts.append(f"+{_fmt_h(extra)}" if extra > 0 else _fmt_h(extra))
     if inc_codes:
         uniq = sorted(set(c for c in inc_codes if c))
         if uniq:
@@ -440,8 +460,6 @@ class ParteReviewRepository:
                     "hora_candef DOUBLE PRECISION",
                     "recurso_precio_hora DOUBLE PRECISION",
                     "deleted_at_utc VARCHAR(64)", "deleted_by VARCHAR(255)",
-                    "horas_orig DOUBLE PRECISION",
-                    "extra_auto BOOLEAN NOT NULL DEFAULT false",
                 ):
                     conn.execute(text(
                         "ALTER TABLE parte_registros ADD COLUMN IF NOT EXISTS "
@@ -613,7 +631,12 @@ class ParteReviewRepository:
     # ----------------------------------------------------------------- #
     # Vista por OBRA.
     # ----------------------------------------------------------------- #
-    def list_obras(self, *, search: str | None = None) -> list[ObraRow]:
+    def list_obras(
+        self,
+        *,
+        search: str | None = None,
+        sin_extra_resolver: Callable[[set[int]], set[int]] | None = None,
+    ) -> list[ObraRow]:
         with self._session_factory.create_session() as session:
             stmt = (
                 select(ParteRegistroOrm)
@@ -623,6 +646,13 @@ class ParteReviewRepository:
                 .where(ParteDocumentOrm.is_active.is_(True))
             )
             regs = list(session.execute(stmt).scalars().all())
+
+        # Recursos SIN codigo de hora extra: sus horas no suman en la lista.
+        sin_extra: set[int] = set()
+        if sin_extra_resolver is not None:
+            _recs = {r.recurso_ide for r in regs if r.recurso_ide}
+            if _recs:
+                sin_extra = sin_extra_resolver(_recs) or set()
 
         groups: dict[str, dict[str, Any]] = {}
         for reg in regs:
@@ -647,6 +677,8 @@ class ParteReviewRepository:
             g["num_registros"] += 1
             if reg.es_incidencia:
                 g["num_incidencias"] += 1
+            elif reg.recurso_ide and reg.recurso_ide in sin_extra:
+                pass  # trabajador SIN codigo de hora extra: no suma horas
             elif _is_extra(reg):
                 g["horas_extra"] += reg.horas or 0.0
             else:
@@ -688,6 +720,7 @@ class ParteReviewRepository:
         period_key: str | None = None,
         mode: str = "nomina",
         holiday_name: Callable[[date], str | None] | None = None,
+        sin_extra_resolver: Callable[[set[int]], set[int]] | None = None,
     ) -> ObraDetail | None:
         with self._session_factory.create_session() as session:
             stmt = (
@@ -765,11 +798,18 @@ class ParteReviewRepository:
                     or "(sin identificar)",
                     "matched": reg.empleado_ide is not None,
                     "days": {},
+                    "categoria": None,
+                    "recurso_ide": None,
                 }
                 agg[wk] = w
+            if w["categoria"] is None and reg.categoria:
+                w["categoria"] = reg.categoria
+            if w["recurso_ide"] is None and reg.recurso_ide:
+                w["recurso_ide"] = reg.recurso_ide
             slot = w["days"].setdefault(
                 reg.fecha, {"normal": 0.0, "extra": 0.0, "inc": [],
-                           "doc": None, "pdf": False, "es_futuro": False}
+                           "doc": None, "pdf": False, "es_futuro": False,
+                           "n_ids": [], "e_ids": [], "regs": []}
             )
             if slot["doc"] is None:
                 slot["doc"] = reg.document_id
@@ -784,8 +824,25 @@ class ParteReviewRepository:
                     slot["inc"].append(reg.incidencia_codigo)
             elif _is_extra(reg):
                 slot["extra"] += reg.horas or 0.0
+                slot["e_ids"].append(reg.id)
+                slot["regs"].append({
+                    "id": reg.id, "t": "e", "h": reg.horas or 0.0,
+                    "p": reg.partida_cod or reg.partida or None,
+                })
             else:
                 slot["normal"] += reg.horas or 0.0
+                slot["n_ids"].append(reg.id)
+                slot["regs"].append({
+                    "id": reg.id, "t": "n", "h": reg.horas or 0.0,
+                    "p": reg.partida_cod or reg.partida or None,
+                })
+
+        # Recursos SIN codigo de hora extra en Sigrid (fuente: reshor).
+        # Sus horas (ordinarias Y extras) NO cuentan en los totales.
+        recursos = {w["recurso_ide"] for w in agg.values() if w["recurso_ide"]}
+        sin_extra: set[int] = set()
+        if sin_extra_resolver is not None and recursos:
+            sin_extra = sin_extra_resolver(recursos) or set()
 
         col_n = [0.0] * len(days)
         col_e = [0.0] * len(days)
@@ -794,6 +851,9 @@ class ParteReviewRepository:
         total_inc = 0
         rows: list[ObraMatrixRow] = []
         for wk, w in agg.items():
+            tiene_extra = not (
+                w["recurso_ide"] and w["recurso_ide"] in sin_extra
+            )
             cells: list[ObraMatrixCell] = []
             row_n = row_e = 0.0
             for dc in days:
@@ -808,6 +868,8 @@ class ParteReviewRepository:
                 n = float(slot["normal"]); e = float(slot["extra"])
                 inc = slot["inc"]
                 fut = bool(slot.get("es_futuro"))
+                n_ids = slot.get("n_ids") or []
+                e_ids = slot.get("e_ids") or []
                 cells.append(ObraMatrixCell(
                     date_iso=dc.date_iso,
                     label=_cell_label(n, e, inc),
@@ -815,18 +877,30 @@ class ParteReviewRepository:
                     is_weekend=dc.is_weekend, is_holiday=dc.is_holiday,
                     document_id=slot.get("doc"), tiene_pdf=bool(slot.get("pdf")),
                     es_futuro=fut,
+                    edit_normal_id=n_ids[0] if len(n_ids) == 1 else None,
+                    edit_extra_id=e_ids[0] if len(e_ids) == 1 else None,
+                    normal_multi=len(n_ids) > 1,
+                    extra_multi=len(e_ids) > 1,
+                    regs=sorted(
+                        slot.get("regs") or [],
+                        key=lambda x: (0 if x["t"] == "n" else 1, x["id"]),
+                    ),
                 ))
                 idx = day_index[dc.date_iso]
-                col_n[idx] += n; col_e[idx] += e
+                if tiene_extra:
+                    col_n[idx] += n; col_e[idx] += e
+                    total_n += n; total_e += e
                 if fut:
                     col_future[idx] = True
                 row_n += n; row_e += e
-                total_n += n; total_e += e
                 total_inc += len(inc)
             rows.append(ObraMatrixRow(
                 worker_key=wk, nombre=w["nombre"], matched=w["matched"],
                 cells=cells, total_normal=round(row_n, 2),
                 total_extra=round(row_e, 2),
+                categoria=w.get("categoria"),
+                recurso_ide=w.get("recurso_ide"),
+                tiene_extra=tiene_extra,
             ))
         rows.sort(key=lambda r: (0 if r.matched else 1, _norm(r.nombre)))
 
@@ -984,6 +1058,67 @@ class ParteReviewRepository:
     # ----------------------------------------------------------------- #
     # Edicion de registros.
     # ----------------------------------------------------------------- #
+    def crear_extra_desde(
+        self,
+        *,
+        registro_id: int,
+        horas: float,
+        hora: dict | None = None,
+    ) -> int | None:
+        """Crea una linea EXTRA nueva clonando el contexto (parte, dia,
+        trabajador, obra, recurso) de un registro ORDINARIO existente.
+
+        Para el editor de celda de la matriz cuando el (trabajador, dia)
+        no tiene aun linea extra. ``hora`` (opcional) trae el codigo de
+        hora EXTRA del recurso resuelto contra reshor; si no llega, la
+        linea queda sin codigo y se asigna en la vista de lineas. No es
+        deshacible con Undo: se elimina con el aspa de la linea."""
+        with self._session_factory.create_session() as session:
+            base = session.get(ParteRegistroOrm, registro_id)
+            if base is None or base.es_incidencia:
+                return None
+            h = hora or {}
+            nuevo = ParteRegistroOrm(
+                document_id=base.document_id,
+                line_index=base.line_index,
+                empleado_line_no=base.empleado_line_no,
+                categoria=base.categoria,
+                trabajador_nombre_leido=base.trabajador_nombre_leido,
+                empleado_ide=base.empleado_ide,
+                empleado_codigo=base.empleado_codigo,
+                empleado_nombre=base.empleado_nombre,
+                empleado_dni=base.empleado_dni,
+                empleado_reside=base.empleado_reside,
+                empleado_match_score=base.empleado_match_score,
+                empleado_match_method=base.empleado_match_method,
+                fecha=base.fecha,
+                fecha_int=base.fecha_int,
+                obra_codigo=base.obra_codigo,
+                obra_nombre=base.obra_nombre,
+                obra_ide=base.obra_ide,
+                tipo_hora="extra",
+                es_incidencia=False,
+                horas=horas,
+                hora_ide=h.get("ide"),
+                hora_codigo=h.get("cod"),
+                hora_descripcion=h.get("res"),
+                hora_ext=1 if h else None,
+                hora_candef=base.hora_candef,
+                hora_precio_coste=h.get("pre"),
+                hora_match_method="manual" if h else None,
+                recurso_ide=base.recurso_ide,
+                recurso_cif=base.recurso_cif,
+                hmo_ide=base.hmo_ide,
+                parte_estado=base.parte_estado,
+            )
+            session.add(nuevo)
+            session.commit()
+            logger.info(
+                "[repo] extra creada id=%s desde registro=%s horas=%s cod=%s",
+                nuevo.id, registro_id, horas, h.get("cod"),
+            )
+            return nuevo.id
+
     def update_registro(
         self,
         *,
@@ -1325,6 +1460,12 @@ class ParteReviewRepository:
                 select(UndoLogOrm).where(UndoLogOrm.undone.is_(False))
             ).scalars().all()))
         return {"ok": True, "description": description, "remaining": remaining}
+
+    def get_registro_recurso(self, registro_id: int) -> int | None:
+        """recurso_ide del registro (para resolver su hora extra)."""
+        with self._session_factory.create_session() as session:
+            r = session.get(ParteRegistroOrm, registro_id)
+            return r.recurso_ide if r is not None else None
 
     def get_registro_leido(self, registro_id: int) -> str | None:
         with self._session_factory.create_session() as session:
@@ -1941,6 +2082,7 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
             and doc.sharepoint_item_id
         ),
         es_futuro=_doc_es_futuro(doc),
+        partida_leida=reg.partida,
         partida_cod=reg.partida_cod,
         partida_res=reg.partida_res,
         partida_capitulo=reg.partida_capitulo,

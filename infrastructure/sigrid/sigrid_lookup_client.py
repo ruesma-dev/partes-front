@@ -10,6 +10,7 @@ en el cliente con los precios.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import logging
 from dataclasses import dataclass, replace as dc_replace
 from typing import Any
@@ -61,8 +62,12 @@ SELECT
 FROM emp
 JOIN con ON emp.ide = con.ide
 LEFT JOIN res ON res.conide = emp.ide
+LEFT JOIN con rescon ON rescon.ide = res.ide
 LEFT JOIN auxrestip ON auxrestip.ide = res.restipide
 LEFT JOIN reshor ON reshor.reside = res.ide AND reshor.horide = res.horide
+WHERE (con.fecbaj IS NULL OR con.fecbaj = 0 OR con.fecbaj > ?)
+  AND (res.ide IS NULL
+       OR rescon.fecbaj IS NULL OR rescon.fecbaj = 0 OR rescon.fecbaj > ?)
 """
 
 
@@ -195,8 +200,16 @@ class SigridLookupClient:
         return out
 
     def fetch_empleados(self) -> list[EmpleadoOption]:
+        """Empleados ACTIVOS: excluye los dados de baja en Sigrid.
+
+        'Dar de baja concepto' escribe ``fecbaj`` (entero YYYYMMDD) en el
+        concepto del EMPLEADO o del RECURSO asociado; 0/NULL = activo. Se
+        excluye si CUALQUIERA de los dos tiene baja efectiva a dia de hoy
+        (una baja con fecha futura sigue apareciendo hasta ese dia).
+        """
+        hoy = int(datetime.now().strftime("%Y%m%d"))
         columns, rows = self._post_sql_read(
-            sql=_SQL_EMPLEADOS, parameters=[], label="empleados"
+            sql=_SQL_EMPLEADOS, parameters=[hoy, hoy], label="empleados"
         )
         out: list[EmpleadoOption] = []
         por_ide: dict[int, EmpleadoOption] = {}
@@ -259,6 +272,101 @@ class SigridLookupClient:
             "%s partidas obra=%s -> %s filas", _LOG_PREFIX, obra_ide, len(out)
         )
         return out
+
+    def fetch_dnis_sin_extra(self, dnis: set[str]) -> set[str]:
+        """DNIs cuyos recursos NO tienen NINGUNA hora EXTRA en ``reshor``.
+
+        Ancla por DNI (fiable), no por recurso_ide (que puede venir mal
+        persistido). Camino: DNI -> res (por emp.dni o res.cif) -> reshor.
+        Un DNI cuenta como CON extra si CUALQUIERA de sus recursos tiene
+        una hora ext=1. Devuelve el conjunto de DNIs (normalizados) SIN
+        extra, que son los que se excluyen de los totales.
+        """
+        norm = {self._norm_dni(d) for d in dnis if d}
+        norm.discard("")
+        if not norm:
+            return set()
+        placeholders = ",".join("?" for _ in norm)
+        # "Tiene extra" = el recurso tiene alguna hora en reshor cuyo
+        # CODIGO empieza por 'HE' (Hora Extra ...). El flag auxhor.ext
+        # NO es fiable aqui: en los datos reales viene 0 incluso para las
+        # HE*, asi que se usa el prefijo del codigo, que es inequivoco.
+        # es_he = 1 si cod LIKE 'HE%', 0 en caso contrario; MAX por DNI.
+        sql = (
+            "SELECT dnin AS dni, MAX(es_he) AS max_he FROM ("
+            "  SELECT REPLACE(REPLACE(UPPER(ISNULL(emp.dni,'')),'-',''),' ','')"
+            "         AS dnin,"
+            "         CASE WHEN auxhor.cod LIKE 'HE%' THEN 1 ELSE 0 END AS es_he"
+            "  FROM res"
+            "  JOIN emp ON emp.ide = res.conide"
+            "  LEFT JOIN reshor ON reshor.reside = res.ide"
+            "  LEFT JOIN auxhor ON auxhor.ide = reshor.horide"
+            f"  WHERE REPLACE(REPLACE(UPPER(ISNULL(emp.dni,'')),'-',''),' ','')"
+            f"        IN ({placeholders})"
+            "  UNION ALL"
+            "  SELECT REPLACE(REPLACE(UPPER(ISNULL(res.cif,'')),'-',''),' ','')"
+            "         AS dnin,"
+            "         CASE WHEN auxhor.cod LIKE 'HE%' THEN 1 ELSE 0 END AS es_he"
+            "  FROM res"
+            "  LEFT JOIN reshor ON reshor.reside = res.ide"
+            "  LEFT JOIN auxhor ON auxhor.ide = reshor.horide"
+            f"  WHERE REPLACE(REPLACE(UPPER(ISNULL(res.cif,'')),'-',''),' ','')"
+            f"        IN ({placeholders})"
+            ") q GROUP BY dnin"
+        )
+        params = list(norm) + list(norm)
+        columns, rows = self._post_sql_read(
+            sql=sql, parameters=params, label="dnis_sin_extra"
+        )
+        idx = {c.lower(): i for i, c in enumerate(columns)}
+        con_extra: set[str] = set()
+        vistos: set[str] = set()
+        for row in rows:
+            d = _opt_str(row[idx["dni"]])
+            mx = _opt_int(row[idx["max_he"]])
+            if not d:
+                continue
+            vistos.add(d)
+            if mx and mx >= 1:
+                con_extra.add(d)
+        # SIN extra = pedidos que NO resultaron con extra (incluye los que
+        # no aparecieron: sin recurso o sin reshor -> sin extra).
+        sin = {d for d in norm if d not in con_extra}
+        logger.info(
+            "[sigrid-lookup] dnis_sin_extra: pedidos=%s con_extra=%s "
+            "sin_extra=%s no_localizados=%s",
+            len(norm), len(con_extra), len(sin),
+            sorted(norm - vistos),
+        )
+        return sin
+
+    @staticmethod
+    def _norm_dni(dni: str | None) -> str:
+        import re
+        return re.sub(r"[^0-9A-Za-z]", "", dni or "").upper()
+
+    def fetch_hora_extra_recurso(self, reside: int) -> dict | None:
+        """Primera hora EXTRA (ext=1) del recurso en ``reshor``: para
+        proponer el codigo al crear una linea extra desde la matriz."""
+        sql = (
+            "SELECT TOP 1 reshor.horide AS ide, auxhor.cod AS cod, "
+            "auxhor.res AS res, reshor.pre AS pre "
+            "FROM reshor JOIN auxhor ON auxhor.ide = reshor.horide "
+            "WHERE auxhor.cod LIKE 'HE%' AND reshor.reside = ? "
+            "ORDER BY auxhor.cod"
+        )
+        columns, rows = self._post_sql_read(
+            sql=sql, parameters=[int(reside)], label="hora_extra_recurso"
+        )
+        if not rows:
+            return None
+        rm = dict(zip([c.lower() for c in columns], rows[0]))
+        return {
+            "ide": _opt_int(rm.get("ide")),
+            "cod": _opt_str(rm.get("cod")),
+            "res": _opt_str(rm.get("res")),
+            "pre": _opt_float(rm.get("pre")),
+        }
 
     def _post_sql_read(
         self, *, sql: str, parameters: list[Any], label: str

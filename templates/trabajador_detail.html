@@ -224,13 +224,13 @@
             <div class="cell-sub">{{ r.partida_res or '' }}
               {% if r.partida_match_method == 'auto_nombre' %}<span class="tag-auto" title="Casado por el nombre del recurso">nombre</span>
               {% elif r.partida_match_method == 'auto_categoria' %}<span class="tag-auto" title="Casado por la categoria">auto</span>
-              {% elif r.partida_match_method == 'manual' %}<span class="tag-manual">manual</span>{% endif %}
+              {% elif r.partida_match_method == 'manual' %}<span class="tag-manual">manual</span>
+              {% elif r.partida_match_method == 'parte' %}<span class="tag-auto" title="Partida escrita en el propio parte (codigo {{ r.partida_leida or r.partida_cod }})">del parte</span>{% endif %}
             </div>
-          {% else %}<span class="muted partida-warn" title="No se encontró partida ni por nombre ni por categoría en CI. No es obligatoria; puedes asignarla a mano.">⚠ sin partida</span>{% endif %}
+          {% else %}{% if r.partida_leida %}<span class="muted partida-warn" title="El parte indica la partida {{ r.partida_leida }} pero ese código no existe (o es ambiguo) en el presupuesto de la obra. Asígnala a mano.">⚠ {{ r.partida_leida }} no encontrada</span>{% else %}<span class="muted partida-warn" title="No se encontró partida ni por nombre ni por categoría en CI. No es obligatoria; puedes asignarla a mano.">⚠ sin partida</span>{% endif %}{% endif %}
         </td>
         <td class="cell-recurso">
           {% if r.parte_estado == 'ok' %}<span class="badge ok" title="Existe parte de trabajo (hmo {{ r.hmo_ide }})">Parte ✓</span>
-          {% elif r.parte_estado == 'sin_parte' %}<span class="badge warn" title="El recurso no tiene parte de trabajo de ese mes/obra">Sin parte</span>
           {% elif r.parte_estado == 'sin_recurso' %}<span class="badge muted-badge" title="No se localizo el recurso en Sigrid">Sin recurso</span>
           {% else %}<span class="muted">—</span>{% endif %}
           {% if r.recurso_cif %}<div class="cell-sub">DNI {{ r.recurso_cif }}{% if r.recurso_ide %} · rec {{ r.recurso_ide }}{% endif %}</div>{% endif %}

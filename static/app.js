@@ -1754,7 +1754,18 @@
         '<button type="button" class="btn-link partida-cancel">Cancelar</button>' +
         '</div>';
       cell.innerHTML = ""; cell.appendChild(ed);
-      function restore() { cell.innerHTML = prev; wireCell(cell); }
+      function onDocDown(ev) {
+        // Clic FUERA del editor (y de su panel flotante): cerrar.
+        if (ed.contains(ev.target) || ev.target.closest(".partida-panel")) return;
+        restore();
+      }
+      function restore() {
+        document.removeEventListener("mousedown", onDocDown, true);
+        cell.innerHTML = prev; wireCell(cell);
+      }
+      setTimeout(function () {
+        document.addEventListener("mousedown", onDocDown, true);
+      }, 0);
       ed.querySelector(".partida-cancel").addEventListener("click", restore);
       buildPartidaPicker(ed.querySelector(".pe-host"), obra, function (p) {
         var targets, omitidas = 0;
@@ -1931,6 +1942,161 @@
         buildOptions(select, items, current);
         select.addEventListener("change", onChange);
       });
+    });
+  });
+})();
+
+/* ==================================================================== *
+ * Matriz de obra: (a) filtro 'sin codigo de hora extra' (ON por defecto)
+ * y (b) edicion inline de TODAS las lineas de una celda con DOBLE CLIC,
+ * incluida la creacion de la linea extra si no existe.
+ * Autonomo: no depende del init principal.
+ * ==================================================================== */
+(function () {
+  "use strict";
+
+  function ready(fn) {
+    if (document.readyState !== "loading") fn();
+    else document.addEventListener("DOMContentLoaded", fn);
+  }
+
+  ready(function () {
+    var matrix = document.querySelector("table.matrix");
+
+    // ---- (a) Ocultar trabajadores sin codigo de hora extra ---- //
+    var toggle = document.getElementById("hide-sin-extra");
+    function applySinExtra() {
+      if (!matrix) return;
+      var hide = toggle ? toggle.checked : true;
+      matrix.querySelectorAll("tbody tr[data-sin-extra='1']").forEach(
+        function (tr) { tr.hidden = hide; });
+    }
+    if (toggle) toggle.addEventListener("change", applySinExtra);
+    applySinExtra(); // por defecto: ocultos
+
+    // ---- (b) Editor de horas de celda (doble clic) ---- //
+    if (!matrix) return;
+    var pop = null;
+
+    function closePop() {
+      if (pop) { pop.remove(); pop = null; }
+    }
+    document.addEventListener("mousedown", function (ev) {
+      if (pop && !pop.contains(ev.target)) closePop();
+    });
+
+    function patchHoras(regId, val) {
+      return fetch("/api/registros/" + regId, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ horas: val }),
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      });
+    }
+
+    function crearExtra(baseOrdId, val) {
+      return fetch("/api/registros/" + baseOrdId + "/extra", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ horas: val }),
+      }).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      });
+    }
+
+    function fila(labelTxt, sub, value) {
+      var wrap = document.createElement("label");
+      wrap.className = "mxe-field";
+      var span = document.createElement("span");
+      span.textContent = labelTxt;
+      if (sub) span.title = sub;
+      var inp = document.createElement("input");
+      inp.type = "number";
+      inp.step = "0.5";
+      inp.value = value;
+      wrap.appendChild(span);
+      wrap.appendChild(inp);
+      return { wrap: wrap, inp: inp };
+    }
+
+    matrix.addEventListener("dblclick", function (ev) {
+      var td = ev.target.closest("td.mx-cell");
+      if (!td || !td.dataset || !td.dataset.regs) return;
+      ev.preventDefault();
+      closePop();
+
+      var regs;
+      try { regs = JSON.parse(td.dataset.regs); } catch (e) { return; }
+      if (!regs || !regs.length) return;
+
+      pop = document.createElement("div");
+      pop.className = "mx-edit-pop";
+      var title = document.createElement("div");
+      title.className = "mxe-title";
+      title.textContent = (td.dataset.trabajador || "") + " \u00b7 "
+        + (td.dataset.fecha || "");
+      pop.appendChild(title);
+
+      // Una fila editable POR LINEA de la celda (con su partida si la tiene).
+      var campos = [];
+      regs.forEach(function (r) {
+        var base = r.t === "n" ? "Ord." : "Extra";
+        var lab = r.p ? (base + " \u00b7 " + r.p) : base;
+        var f = fila(lab, r.p ? ("Partida " + r.p) : null, r.h);
+        campos.push({ f: f, reg: r });
+        pop.appendChild(f.wrap);
+      });
+
+      // Sin linea extra aun: permitir CREARLA (clona contexto del 1er Ord.).
+      var nueva = null;
+      var hayExtra = regs.some(function (r) { return r.t === "e"; });
+      var primerOrd = regs.filter(function (r) { return r.t === "n"; })[0];
+      if (!hayExtra && primerOrd) {
+        nueva = fila("Extra", "Se creara una linea extra nueva", 0);
+        pop.appendChild(nueva.wrap);
+      }
+
+      var bar = document.createElement("div");
+      bar.className = "mxe-actions";
+      var ok = document.createElement("button");
+      ok.type = "button"; ok.className = "btn small"; ok.textContent = "Guardar";
+      var cancel = document.createElement("button");
+      cancel.type = "button"; cancel.className = "btn secondary small";
+      cancel.textContent = "Cancelar";
+      bar.appendChild(ok); bar.appendChild(cancel);
+      pop.appendChild(bar);
+
+      cancel.addEventListener("click", closePop);
+      ok.addEventListener("click", function () {
+        var jobs = [];
+        campos.forEach(function (it) {
+          var v = it.f.inp.value;
+          if (v === "" || parseFloat(v) === it.reg.h) return;
+          jobs.push(patchHoras(it.reg.id, v));
+        });
+        if (nueva && nueva.inp.value !== "" && parseFloat(nueva.inp.value) !== 0) {
+          jobs.push(crearExtra(primerOrd.id, nueva.inp.value));
+        }
+        if (!jobs.length) { closePop(); return; }
+        ok.disabled = true;
+        Promise.all(jobs)
+          .then(function () { window.location.reload(); })
+          .catch(function () {
+            ok.disabled = false;
+            title.textContent = "\u2717 Error guardando. Reintenta.";
+          });
+      });
+
+      document.body.appendChild(pop);
+      var r = td.getBoundingClientRect();
+      pop.style.left = Math.max(8, window.scrollX + r.left - 40) + "px";
+      pop.style.top = (window.scrollY + r.bottom + 4) + "px";
+      var first = pop.querySelector("input");
+      if (first) { first.focus(); first.select(); }
+      ev.stopPropagation();
     });
   });
 })();

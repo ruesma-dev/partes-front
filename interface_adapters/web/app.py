@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import html
 import logging
-import re
 import time
-import unicodedata
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import urlencode
 
 import httpx
 from fastapi import Body, FastAPI, Form, HTTPException, Query, Request
@@ -123,32 +121,6 @@ def _preview_error_html(*, title: str, message: str, external_url: str | None) -
  a{{color:#9f2842;text-decoration:none;font-weight:600}}
 </style></head>
 <body><div class="card"><h1>{safe_title}</h1><p>{safe_message}</p>{link}</div></body></html>"""
-
-
-def _content_disposition_inline(filename: str | None) -> str:
-    """Content-Disposition 'inline' SEGURO para proxies estrictos.
-
-    El sidecar de Easy Auth (proxy .NET delante del Container App) rechaza
-    cabeceras HTTP con bytes no-ASCII y responde un 500 seco AUNQUE la app
-    haya devuelto 200. Los adjuntos reales traen nombres con tildes/enye/
-    grado ("PARTE Nº4 JOSÉ.pdf"), asi que: filename= con version ASCII
-    saneada + filename*=UTF-8'' con el nombre real percent-encoded
-    (RFC 5987), que es puro ASCII y todos los navegadores modernos leen.
-    """
-    raw = (filename or "").strip() or "parte.pdf"
-    ascii_name = (
-        unicodedata.normalize("NFKD", raw)
-        .encode("ascii", "ignore")
-        .decode("ascii")
-    )
-    ascii_name = re.sub(r'[^A-Za-z0-9._ ()-]+', "_", ascii_name).strip()
-    if not ascii_name or ascii_name in {".", ".."}:
-        ascii_name = "parte.pdf"
-    utf8_quoted = quote(raw, safe="")
-    return (
-        f'inline; filename="{ascii_name}"; '
-        f"filename*=UTF-8''{utf8_quoted}"
-    )
 
 
 def _guess_pdf_media_type(name: str | None) -> str:
@@ -301,6 +273,38 @@ def build_app(settings: Settings) -> FastAPI:
         subdiv=settings.holidays_subdiv,
         extra_iso=settings.holidays_extra_list,
     )
+
+    # Resolver de recursos SIN codigo de hora extra (fuente: reshor de
+    # Sigrid), con cache en proceso de 10 min. Ante fallo de Sigrid se
+    # asume que TODOS tienen (no se excluye nada: fail-open).
+    _extra_cache: dict[str, Any] = {"ts": 0.0, "map": {}}
+
+    def recursos_sin_extra_resolver(ides: set[int]) -> set[int]:
+        if not settings.sigrid_lookup_enabled:
+            return set()
+        now = time.time()
+        if now - _extra_cache["ts"] > 600:
+            _extra_cache["map"] = {}
+            _extra_cache["ts"] = now
+        known: dict[int, bool] = _extra_cache["map"]
+        missing = {int(i) for i in ides if i and int(i) not in known}
+        if missing:
+            try:
+                con_extra = sigrid_client.fetch_recursos_con_extra(missing)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "[recursos-extra] fallo consultando reshor; no se "
+                    "excluye ningun recurso de los totales", exc_info=True,
+                )
+                con_extra = set(missing)
+            for i in missing:
+                known[i] = i in con_extra
+        sin = {int(i) for i in ides if i and not known.get(int(i), True)}
+        logger.info(
+            "[recursos-extra] consultados=%s sin_codigo_extra=%s",
+            sorted(int(i) for i in ides if i), sorted(sin),
+        )
+        return sin
 
     app = FastAPI(title=settings.app_title, version=settings.service_version)
     app.state.settings = settings
@@ -503,7 +507,9 @@ def build_app(settings: Settings) -> FastAPI:
         search: str | None = Query(default=None),
         message: str | None = Query(default=None),
     ) -> HTMLResponse:
-        obras = repository.list_obras(search=search)
+        obras = repository.list_obras(
+            search=search, sin_extra_resolver=recursos_sin_extra_resolver
+        )
         context = {
             "request": request,
             "title": settings.app_title,
@@ -531,9 +537,21 @@ def build_app(settings: Settings) -> FastAPI:
         detail = repository.get_obra(
             obra_key, period_key=period, mode=mode,
             holiday_name=holiday_provider.name,
+            sin_extra_resolver=recursos_sin_extra_resolver,
         )
         if detail is None:
             raise HTTPException(status_code=404, detail="Obra no encontrada")
+
+        # Trabajadores SIN codigo de hora extra: sus horas tampoco cuentan
+        # en el KPI 'Extra por jornada'.
+        _excl_rec = {
+            r.recurso_ide for r in detail.rows
+            if not r.tiene_extra and r.recurso_ide
+        }
+        _regs_kpi = [
+            v for v in detail.registros
+            if not (v.recurso_ide and v.recurso_ide in _excl_rec)
+        ]
 
         # Avisos de jornada incompleta por (trabajador, dia): horas
         # ordinarias EN ESTA OBRA por debajo del CanDefecto efectivo del
@@ -565,7 +583,7 @@ def build_app(settings: Settings) -> FastAPI:
             "detail": detail,
             "period_options": detail.period_options,
             "selected_period": detail.period_key,
-            "extras": extras_por_jornada(detail.registros),
+            "extras": extras_por_jornada(_regs_kpi),
             "candef_minimo": settings.candef_minimo_valido,
             "jornada_defecto": settings.jornada_por_defecto,
             "incompletos": incompletos,
@@ -995,27 +1013,7 @@ def build_app(settings: Settings) -> FastAPI:
     # ---------------- Visor del PDF del parte ------------------------ #
     @app.get("/partes/{document_id}/preview", response_class=Response)
     def parte_preview(document_id: str) -> Response:
-        try:
-            ref = repository.get_sharepoint_ref(document_id)
-        except Exception as exc:  # noqa: BLE001
-            # Un fallo al LEER la referencia en la BD (p.ej. desajuste de
-            # esquema) devolvia un HTTP 500 mudo. Se captura para mostrar el
-            # detalle y dejar rastro en el log en lugar de romper el visor.
-            logger.exception(
-                "[preview] fallo leyendo la referencia SharePoint "
-                "document_id=%s", document_id,
-            )
-            return HTMLResponse(
-                _preview_error_html(
-                    title="Error accediendo al parte",
-                    message=(
-                        "No se pudo leer la referencia del parte en la base "
-                        f"de datos: {type(exc).__name__}: {exc}"
-                    ),
-                    external_url=None,
-                ),
-                status_code=500,
-            )
+        ref = repository.get_sharepoint_ref(document_id)
         if ref is None:
             raise HTTPException(status_code=404, detail="Parte no encontrado")
 
@@ -1076,7 +1074,7 @@ def build_app(settings: Settings) -> FastAPI:
                 content=resp.content,
                 media_type=media,
                 headers={
-                    "Content-Disposition": _content_disposition_inline(fname),
+                    "Content-Disposition": f'inline; filename="{fname}"',
                     "Cache-Control": "no-store",
                 },
             )
@@ -1137,6 +1135,36 @@ def build_app(settings: Settings) -> FastAPI:
         }
 
     # ---------------- Edicion de registros --------------------------- #
+    @app.post("/api/registros/{registro_id}/extra", include_in_schema=False)
+    async def registro_crear_extra(registro_id: int, request: Request) -> JSONResponse:
+        """Crea la linea EXTRA de un (trabajador, dia) desde la matriz,
+        clonando el contexto del registro ORDINARIO ``registro_id``. El
+        codigo de hora extra se resuelve best-effort contra reshor."""
+        body = await request.json()
+        try:
+            horas = float(body.get("horas"))
+        except (TypeError, ValueError):
+            return JSONResponse({"ok": False, "error": "horas invalidas"},
+                                status_code=422)
+        reside = repository.get_registro_recurso(registro_id)
+        hora_info = None
+        if reside and settings.sigrid_lookup_enabled and sigrid_client:
+            try:
+                hora_info = sigrid_client.fetch_hora_extra_recurso(reside)
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "[crear-extra] fallo resolviendo hora extra del "
+                    "recurso=%s; la linea queda sin codigo",
+                    reside, exc_info=True,
+                )
+        nuevo_id = repository.crear_extra_desde(
+            registro_id=registro_id, horas=horas, hora=hora_info,
+        )
+        if nuevo_id is None:
+            return JSONResponse({"ok": False, "error": "registro no valido"},
+                                status_code=404)
+        return JSONResponse({"ok": True, "id": nuevo_id})
+
     @app.patch("/api/registros/{registro_id}/hora")
     def set_registro_hora(
         registro_id: int,

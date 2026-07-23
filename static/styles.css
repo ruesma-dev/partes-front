@@ -787,3 +787,22 @@ tr.row-selected > td:first-child { box-shadow: inset 3px 0 0 var(--brand, #9f284
   border: 1px solid #fedf89; border-radius: 6px;
   padding: 1px 7px; font-size: 12px; white-space: nowrap;
 }
+
+
+/* ---- Matriz: toggle sin-extra, columna categoria y editor de celda ---- */
+.matrix-legend { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.mx-toggle { display: inline-flex; gap: 6px; align-items: center;
+  font-size: 12px; cursor: pointer; white-space: nowrap; }
+.matrix .mx-cat { max-width: 110px; font-size: 11px; color: #555;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mx-edit-pop { position: absolute; z-index: 60; background: #fff;
+  border: 1px solid #c9c9c9; border-radius: 8px; padding: 10px 12px;
+  box-shadow: 0 6px 22px rgba(0,0,0,.18); min-width: 200px; }
+.mx-edit-pop .mxe-title { font-size: 11px; color: #666; margin-bottom: 8px;
+  max-width: 230px; }
+.mx-edit-pop .mxe-field { display: flex; align-items: center; gap: 8px;
+  margin-bottom: 6px; font-size: 12px; }
+.mx-edit-pop .mxe-field span { width: 40px; color: #444; }
+.mx-edit-pop .mxe-field input { width: 90px; }
+.mx-edit-pop .mxe-actions { display: flex; gap: 8px; justify-content: flex-end;
+  margin-top: 8px; }
