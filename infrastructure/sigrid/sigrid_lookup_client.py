@@ -57,6 +57,7 @@ SELECT
     con.cod       AS codigo,
     emp.res       AS nombre,
     emp.dni       AS dni,
+    res.ide       AS reside,
     auxrestip.res AS categoria,
     reshor.candef AS candef
 FROM emp
@@ -113,6 +114,7 @@ class EmpleadoOption:
     dni: str | None
     categoria: str | None = None
     candef: float | None = None
+    reside: int | None = None   # recurso (res.ide) del empleado
 
 
 @dataclass
@@ -220,6 +222,7 @@ class SigridLookupClient:
                 continue
             categoria = _opt_str(rm.get("categoria"))
             candef = _opt_float(rm.get("candef"))
+            reside = _opt_int(rm.get("reside"))
             previo = por_ide.get(ide)
             if previo is not None:
                 # El JOIN con res/reshor puede duplicar filas (varios
@@ -230,6 +233,8 @@ class SigridLookupClient:
                     cambios["categoria"] = categoria
                 if previo.candef is None and candef is not None:
                     cambios["candef"] = candef
+                if previo.reside is None and reside is not None:
+                    cambios["reside"] = reside
                 if cambios:
                     nuevo = dc_replace(previo, **cambios)
                     por_ide[ide] = nuevo
@@ -242,6 +247,7 @@ class SigridLookupClient:
                 dni=_opt_str(rm.get("dni")),
                 categoria=categoria,
                 candef=candef,
+                reside=reside,
             )
             por_ide[ide] = emp
             out.append(emp)

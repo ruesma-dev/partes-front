@@ -23,6 +23,12 @@
             data-emp-nombre="{{ detail.nombre or '' }}"
             data-emp-dni="{{ detail.dni or '' }}"
             data-emp-label="{{ detail.nombre or '' }}">+ Añadir línea</button>
+    {% if transfer_enabled %}
+    <button type="button" class="btn ok" id="aprobar-todo" data-scope="visible"
+            title="Registrar en Sigrid las lineas visibles de la tabla (respeta los filtros)">
+      ✓ Aprobar visibles
+    </button>
+    {% endif %}
     <a class="btn secondary" href="/trabajadores">← Trabajadores</a>
     <button type="button" class="btn danger" data-del-worker="{{ worker_key }}"
             data-label="{{ detail.nombre }}">Borrar persona</button>
@@ -152,6 +158,7 @@
         <th>Partida (imputacion)</th>
         <th>Recurso / Parte</th>
         <th>Firma parte</th>
+        {% if transfer_enabled %}<th>Sigrid</th>{% endif %}
         {% if preview_enabled %}<th>Parte</th>{% endif %}
       </tr>
       <tr class="filter-row">
@@ -164,12 +171,13 @@
         <th><input class="col-filter" type="text" placeholder="Partida…"></th>
         <th><input class="col-filter" type="text" placeholder="Recurso…"></th>
         <th><button type="button" class="filter-clear">Limpiar</button></th>
+        {% if transfer_enabled %}<th></th>{% endif %}
         {% if preview_enabled %}<th></th>{% endif %}
       </tr>
     </thead>
     <tbody>
       {% for r in detail.registros %}
-      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}" data-obra-ide="{{ r.obra_ide if r.obra_ide is not none else '' }}" data-fecha="{{ r.fecha or '' }}">
+      <tr data-registro-id="{{ r.id }}" data-document-id="{{ r.document_id }}" data-obra-ide="{{ r.obra_ide if r.obra_ide is not none else '' }}" data-fecha="{{ r.fecha or '' }}" data-inc="{{ '1' if r.es_incidencia else '' }}">
         <td class="cell-fecha">
           <input type="date" class="fecha-edit cell-edit"
                  data-document-id="{{ r.document_id }}"
@@ -245,6 +253,18 @@
           {% endif %}
           {% if r.parte_aprobado %}<span class="badge ok">Aprobado</span>{% endif %}
         </td>
+        {% if transfer_enabled %}
+        <td class="cell-sigrid">
+          {% if r.sigrid_estado == 'registrado' %}
+            <span class="badge ok" title="Registrado en Sigrid{% if r.sigrid_parte_cod %} · parte {{ r.sigrid_parte_cod }}{% endif %}">✓ {{ r.sigrid_parte_cod or 'registrado' }}</span>
+          {% elif r.sigrid_estado == 'omitido' %}
+            <span class="badge warn" title="{{ r.sigrid_motivo or 'No se registra' }}">omitido</span>
+            <button type="button" class="btn small aprobar-linea" data-registro-id="{{ r.id }}" title="Reintentar el registro de esta linea">↻</button>
+          {% else %}
+            <button type="button" class="btn small ok aprobar-linea" data-registro-id="{{ r.id }}" title="Registrar esta linea en Sigrid">Aprobar</button>
+          {% endif %}
+        </td>
+        {% endif %}
         {% if preview_enabled %}
         <td class="cell-parte">
           {% if r.tiene_pdf %}

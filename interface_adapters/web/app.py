@@ -51,6 +51,7 @@ from infrastructure.database.parte_repository import (
     extras_por_jornada,
 )
 from infrastructure.database.session_factory import SessionFactory
+from infrastructure.transfer.transfer_client import TransferClient
 from infrastructure.sigrid.sigrid_lookup_client import SigridLookupClient
 from infrastructure.graph.token_provider import GraphTokenProvider
 from application.services.obra_catalog import ObraCatalog
@@ -274,37 +275,64 @@ def build_app(settings: Settings) -> FastAPI:
         extra_iso=settings.holidays_extra_list,
     )
 
-    # Resolver de recursos SIN codigo de hora extra (fuente: reshor de
-    # Sigrid), con cache en proceso de 10 min. Ante fallo de Sigrid se
-    # asume que TODOS tienen (no se excluye nada: fail-open).
+    # Cliente del servicio de REGISTRO en Sigrid (partes-transfer, sv5).
+    transfer_client = None
+    if settings.transfer_enabled:
+        transfer_client = TransferClient(
+            base_url=settings.transfer_base_url,
+            timeout_s=settings.transfer_timeout_s,
+        )
+        logger.info("[transfer][wiring] CABLEADO base_url=%s",
+                    settings.transfer_base_url)
+    else:
+        logger.info("[transfer][wiring] DESHABILITADO (falta TRANSFER_BASE_URL)")
+
+    # Resolver de trabajadores SIN codigo de hora extra (fuente: reshor de
+    # Sigrid, ANCLADO POR DNI), con cache en proceso de 10 min. Ante fallo
+    # de Sigrid se asume que TODOS tienen (no se excluye a nadie: fail-open).
+    # known[dni_normalizado] = True si TIENE extra, False si NO.
     _extra_cache: dict[str, Any] = {"ts": 0.0, "map": {}}
 
-    def recursos_sin_extra_resolver(ides: set[int]) -> set[int]:
-        if not settings.sigrid_lookup_enabled:
+    def _norm_dni(dni: str | None) -> str:
+        import re
+        return re.sub(r"[^0-9A-Za-z]", "", dni or "").upper()
+
+    def recursos_sin_extra_resolver(trabajadores: list[dict]) -> set[str]:
+        """Recibe [{'dni':..., 'recurso_ide':...}, ...] y devuelve el
+        conjunto de DNIs (normalizados) que NO tienen codigo de hora
+        extra en Sigrid. La exclusion se ancla al DNI, no al recurso_ide
+        (que puede estar mal persistido)."""
+        if not settings.sigrid_lookup_enabled or not sigrid_client:
             return set()
         now = time.time()
         if now - _extra_cache["ts"] > 600:
             _extra_cache["map"] = {}
             _extra_cache["ts"] = now
-        known: dict[int, bool] = _extra_cache["map"]
-        missing = {int(i) for i in ides if i and int(i) not in known}
-        if missing:
+        known: dict[str, bool] = _extra_cache["map"]
+
+        pedidos = {_norm_dni(t.get("dni")) for t in trabajadores}
+        pedidos.discard("")
+        faltan = {d for d in pedidos if d not in known}
+        if faltan:
             try:
-                con_extra = sigrid_client.fetch_recursos_con_extra(missing)
+                sin = sigrid_client.fetch_dnis_sin_extra(faltan)
             except Exception:  # noqa: BLE001
                 logger.warning(
-                    "[recursos-extra] fallo consultando reshor; no se "
-                    "excluye ningun recurso de los totales", exc_info=True,
+                    "[recursos-extra] fallo consultando reshor por DNI; no "
+                    "se excluye a nadie de los totales", exc_info=True,
                 )
-                con_extra = set(missing)
-            for i in missing:
-                known[i] = i in con_extra
-        sin = {int(i) for i in ides if i and not known.get(int(i), True)}
+                sin = set()  # fail-open: todos cuentan
+                for d in faltan:
+                    known[d] = True
+            else:
+                for d in faltan:
+                    known[d] = d not in sin  # True = tiene extra
+        resultado = {d for d in pedidos if not known.get(d, True)}
         logger.info(
-            "[recursos-extra] consultados=%s sin_codigo_extra=%s",
-            sorted(int(i) for i in ides if i), sorted(sin),
+            "[recursos-extra] dnis=%s sin_codigo_extra=%s",
+            sorted(pedidos), sorted(resultado),
         )
-        return sin
+        return resultado
 
     app = FastAPI(title=settings.app_title, version=settings.service_version)
     app.state.settings = settings
@@ -491,6 +519,7 @@ def build_app(settings: Settings) -> FastAPI:
             "period_mode": mode,
             "sigrid_enabled": settings.sigrid_lookup_enabled,
             "preview_enabled": settings.preview_enabled,
+            "transfer_enabled": transfer_client is not None,
             "back": f"/trabajadores/{worker_key}",
             "worker_key": worker_key,
             "message": message,
@@ -584,6 +613,7 @@ def build_app(settings: Settings) -> FastAPI:
             "period_options": detail.period_options,
             "selected_period": detail.period_key,
             "extras": extras_por_jornada(_regs_kpi),
+            "transfer_enabled": transfer_client is not None,
             "candef_minimo": settings.candef_minimo_valido,
             "jornada_defecto": settings.jornada_por_defecto,
             "incompletos": incompletos,
@@ -976,7 +1006,8 @@ def build_app(settings: Settings) -> FastAPI:
             "ok": True,
             "items": [
                 {"ide": e.ide, "codigo": e.codigo, "nombre": e.nombre,
-                 "dni": e.dni, "categoria": e.categoria, "candef": e.candef,
+                 "dni": e.dni, "reside": e.reside, "categoria": e.categoria,
+                 "candef": e.candef,
                  "jornada_sugerida": _sugerida(e.candef)}
                 for e in items
             ],
@@ -1103,6 +1134,35 @@ def build_app(settings: Settings) -> FastAPI:
             raise HTTPException(status_code=404, detail="Parte no encontrado")
         return {"ok": True, "fecha": fecha_iso, "fecha_int": fecha_int}
 
+    def _norm_grupos(cod: str | None) -> str:
+        """Normaliza un codigo de partida por grupos numericos: '3.9' y
+        '03.09' son la misma partida. Los grupos no numericos se comparan
+        en mayusculas tal cual (CI.1.10 == ci.1.10)."""
+        partes = [p.strip() for p in (cod or "").strip().upper().split(".")]
+        out = []
+        for p in partes:
+            out.append(str(int(p)) if p.isdigit() else p)
+        return ".".join(x for x in out if x)
+
+    def _casar_partida_por_codigo(objetivo: str | None,
+                                  hojas: list[dict]) -> dict | None:
+        """Match del codigo contra las partidas-hoja de la obra nueva:
+        (1) igualdad normalizada; (2) prefijo normalizado UNICO. Ambiguo o
+        inexistente -> None (queda en blanco con aviso en el front)."""
+        objetivo_n = _norm_grupos(objetivo)
+        if not objetivo_n:
+            return None
+        exactas = [h for h in hojas if _norm_grupos(h.get("cod")) == objetivo_n]
+        if len(exactas) == 1:
+            return exactas[0]
+        if len(exactas) > 1:
+            return None
+        prefijo = [h for h in hojas
+                   if _norm_grupos(h.get("cod")).startswith(objetivo_n + ".")]
+        if len(prefijo) == 1:
+            return prefijo[0]
+        return None
+
     @app.patch("/api/partes/{document_id}/obra")
     def patch_parte_obra(
         document_id: str,
@@ -1119,19 +1179,64 @@ def build_app(settings: Settings) -> FastAPI:
             if opt is not None:
                 ide = opt.ide
                 nombre = opt.nombre
-        ok = repository.update_parte_obra(
+        objetivos = repository.update_parte_obra(
             document_id=document_id,
             obra_ide=ide,
             obra_codigo=payload.codigo,
             obra_nombre=nombre,
         )
-        if not ok:
+        if objetivos is None:
             raise HTTPException(status_code=404, detail="Parte no encontrado")
+
+        # Re-casar las partidas contra el presupuesto de la obra NUEVA:
+        # los paride del presupuesto viejo no valen aunque el codigo sea
+        # el mismo texto. Match por codigo normalizado + prefijo unico.
+        recasadas, sin_match = 0, 0
+        if objetivos and ide and settings.sigrid_lookup_enabled and sigrid_client:
+            try:
+                from application.services.partida_catalog import (
+                    build_arbol_partidas, partidas_hoja,
+                )
+                filas = sigrid_client.fetch_partidas_obra(int(ide))
+                hojas = [
+                    {"ide": n.ide, "cod": n.cod, "res": n.res,
+                     "capitulo": n.categoria}
+                    for n in partidas_hoja(build_arbol_partidas(filas))
+                ]
+                for obj in objetivos:
+                    match = _casar_partida_por_codigo(
+                        obj.get("objetivo_cod"), hojas
+                    )
+                    if match:
+                        repository.aplicar_partida_recasada(
+                            registro_id=obj["registro_id"], partida=match,
+                            metodo=obj.get("metodo_previo") or "parte",
+                            score=obj.get("score_previo"),
+                        )
+                        recasadas += 1
+                    else:
+                        sin_match += 1
+                logger.info(
+                    "[obra-cambiada] parte=%s partidas re-casadas=%s "
+                    "sin_match=%s (obra %s)",
+                    document_id, recasadas, sin_match, payload.codigo,
+                )
+            except Exception:  # noqa: BLE001
+                sin_match = len(objetivos)
+                logger.warning(
+                    "[obra-cambiada] fallo re-casando partidas; quedan en "
+                    "blanco para imputar a mano", exc_info=True,
+                )
+        elif objetivos:
+            sin_match = len(objetivos)
+
         return {
             "ok": True,
             "obra_ide": ide,
             "obra_codigo": payload.codigo,
             "obra_nombre": nombre,
+            "partidas_recasadas": recasadas,
+            "partidas_sin_match": sin_match,
         }
 
     # ---------------- Edicion de registros --------------------------- #
@@ -1164,6 +1269,71 @@ def build_app(settings: Settings) -> FastAPI:
             return JSONResponse({"ok": False, "error": "registro no valido"},
                                 status_code=404)
         return JSONResponse({"ok": True, "id": nuevo_id})
+
+    # ------------------------------------------------------------------ #
+    # APROBAR -> registrar en Sigrid (delegado en partes-transfer, sv5)
+    # ------------------------------------------------------------------ #
+
+    def _payload_registro(body: dict) -> dict | JSONResponse:
+        """Construye el payload de sv5 desde los ids (o desde la obra)."""
+        ids = [int(i) for i in (body.get("registro_ids") or []) if i]
+        if not ids:
+            obra_key = (body.get("obra_key") or "").strip()
+            if not obra_key:
+                return JSONResponse(
+                    {"ok": False, "error": "faltan registro_ids u obra_key"},
+                    status_code=422)
+            ids = repository.registro_ids_de_obra(
+                obra_key, period_key=body.get("period"),
+                mode=(body.get("mode") or "nomina"))
+        datos = repository.lineas_para_registro(ids)
+        if not datos["lineas"]:
+            return JSONResponse(
+                {"ok": False, "error": "no hay lineas activas que registrar"},
+                status_code=422)
+        return {
+            "obra": datos["obra"],
+            "lineas": datos["lineas"],
+            "pisar_claves": [str(k) for k in (body.get("pisar_claves") or [])],
+            "usuario": settings.default_reviewer,
+        }
+
+    @app.post("/api/aprobar/preflight", include_in_schema=False)
+    async def aprobar_preflight(request: Request) -> JSONResponse:
+        if transfer_client is None:
+            return JSONResponse(
+                {"ok": False, "error": "registro en Sigrid no configurado "
+                                       "(TRANSFER_BASE_URL)"},
+                status_code=503)
+        payload = _payload_registro(await request.json())
+        if isinstance(payload, JSONResponse):
+            return payload
+        return JSONResponse(transfer_client.preflight(payload))
+
+    @app.post("/api/aprobar/ejecutar", include_in_schema=False)
+    async def aprobar_ejecutar(request: Request) -> JSONResponse:
+        if transfer_client is None:
+            return JSONResponse(
+                {"ok": False, "error": "registro en Sigrid no configurado "
+                                       "(TRANSFER_BASE_URL)"},
+                status_code=503)
+        body = await request.json()
+        payload = _payload_registro(body)
+        if isinstance(payload, JSONResponse):
+            return payload
+        resultado = transfer_client.ejecutar(payload)
+        if resultado.get("ok"):
+            try:
+                repository.marcar_registros_sigrid(
+                    escritas=resultado.get("escritas") or [],
+                    omitidas=resultado.get("omitidas") or [],
+                    ya_registradas=resultado.get("ya_registradas") or [],
+                    usuario=settings.default_reviewer,
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("[transfer] no se pudo guardar la traza del "
+                               "registro", exc_info=True)
+        return JSONResponse(resultado)
 
     @app.patch("/api/registros/{registro_id}/hora")
     def set_registro_hora(
@@ -1361,6 +1531,17 @@ def build_app(settings: Settings) -> FastAPI:
             request=request, name="nuevo_parte.html", context=context
         )
 
+    # Incidencias estandar del parte (J.310) -> codigo CI* de Sigrid.
+    _INCIDENCIAS_CI = {
+        "V": "CIV",    # Vacaciones
+        "B": "CIE",    # Baja enfermedad comun (Enfermedad/Acc. no laboral)
+        "AT": "CIA",   # Accidente / Enf. profesional
+        "FJ": "CIP",   # Falta justificada / Permiso
+        "F": "CIF",    # Falta injustificada
+        "H": "CIH",    # Huelga
+        "M": "CIM",    # Maternidad / Paternidad
+    }
+
     @app.post("/api/partes/nuevo", include_in_schema=False)
     async def api_partes_nuevo(request: Request) -> JSONResponse:
         try:
@@ -1387,25 +1568,65 @@ def build_app(settings: Settings) -> FastAPI:
                 {"ok": False, "error": "Falta la obra."}, status_code=400
             )
 
+        # Incidencia y horas son EXCLUYENTES.
+        incidencia = (data.get("incidencia_codigo") or "").strip().upper() or None
+        if incidencia and incidencia not in _INCIDENCIAS_CI:
+            return JSONResponse(
+                {"ok": False,
+                 "error": f"Incidencia desconocida: {incidencia}"},
+                status_code=400,
+            )
+
         def _f(v: Any) -> float:
             try:
                 return float(v)
             except (TypeError, ValueError):
                 return 0.0
 
+        _ord = _f(data.get("horas_ordinaria"))
+        _ext = _f(data.get("horas_extra"))
+        if incidencia and (abs(_ord) > 1e-9 or abs(_ext) > 1e-9):
+            return JSONResponse(
+                {"ok": False, "error": "Una incidencia no lleva horas: pon "
+                                       "las horas a 0 o quita la incidencia."},
+                status_code=400,
+            )
+        if not incidencia and abs(_ord) < 1e-9 and abs(_ext) < 1e-9:
+            return JSONResponse(
+                {"ok": False,
+                 "error": "Pon horas (ordinarias o extra) o elige una "
+                          "incidencia."},
+                status_code=400,
+            )
+
         # Casar el CODIGO DE HORA por categoria+tipo (igual que sv3 en la
         # ingesta), para que las lineas manuales no salgan "sin asignar".
         hora_normal = None
         hora_extra = None
+        hora_incidencia = None
         categoria_txt = (data.get("categoria") or "").strip()
         if categoria_txt and sigrid_client is not None:
             try:
                 from application.services.tipo_hora_matcher import (
-                    TipoHoraMatcher,
+                    HoraMatch, TipoHoraMatcher,
                 )
-                matcher = TipoHoraMatcher(sigrid_client.fetch_tipos_hora())
+                tipos_catalogo = sigrid_client.fetch_tipos_hora()
+                matcher = TipoHoraMatcher(tipos_catalogo)
                 hora_normal = matcher.match(categoria_txt, extra=False)
                 hora_extra = matcher.match(categoria_txt, extra=True)
+                if incidencia:
+                    ci_cod = _INCIDENCIAS_CI[incidencia]
+                    th = next(
+                        (x for x in tipos_catalogo
+                         if (x.codigo or "").strip().upper() == ci_cod),
+                        None,
+                    )
+                    if th is not None:
+                        hora_incidencia = HoraMatch(
+                            ide=th.ide, codigo=th.codigo,
+                            descripcion=th.descripcion, ext=th.ext,
+                            pre=th.pre, prenom=th.prenom, method="manual",
+                        )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[partes-nuevo] match codigo hora fallo: %r", exc)
 
@@ -1456,8 +1677,10 @@ def build_app(settings: Settings) -> FastAPI:
             empleado_reside=_as_int(data.get("empleado_reside")),
             categoria=(data.get("categoria") or None),
             dias=[str(d) for d in dias],
-            horas_ordinaria=_f(data.get("horas_ordinaria")),
-            horas_extra=_f(data.get("horas_extra")),
+            horas_ordinaria=_ord,
+            horas_extra=_ext,
+            incidencia_codigo=incidencia,
+            hora_incidencia=hora_incidencia,
             partida_ide=partida_ide,
             partida_cod=partida_cod,
             partida_res=partida_res_txt,

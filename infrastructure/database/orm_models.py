@@ -184,6 +184,15 @@ class ParteRegistroOrm(Base):
     hmo_ide: Mapped[int | None] = mapped_column(Integer)
     parte_estado: Mapped[str | None] = mapped_column(String(16))
 
+    # --- Traza del REGISTRO en Sigrid (escritura via partes-transfer) --- #
+    sigrid_estado: Mapped[str | None] = mapped_column(String(16))
+    sigrid_registrado_at_utc: Mapped[str | None] = mapped_column(String(64))
+    sigrid_registrado_by: Mapped[str | None] = mapped_column(String(255))
+    sigrid_hmoide: Mapped[int | None] = mapped_column(Integer)
+    sigrid_hmores_ide: Mapped[int | None] = mapped_column(Integer)
+    sigrid_parte_cod: Mapped[str | None] = mapped_column(String(64))
+    sigrid_motivo: Mapped[str | None] = mapped_column(String(255))
+
     # --- CODIGO DE HORA resuelto (Sigrid auxhor) --- #
     hora_ide: Mapped[int | None] = mapped_column(Integer)
     hora_codigo: Mapped[str | None] = mapped_column(String(64))
@@ -194,14 +203,6 @@ class ParteRegistroOrm(Base):
     # CanDefecto (jornada laborable por defecto del recurso) escrito por sv3.
     hora_candef: Mapped[float | None] = mapped_column(Float)
     recurso_precio_hora: Mapped[float | None] = mapped_column(Float)
-    # Horas ORIGINALES del registro normal antes de que sv3 recortara parte
-    # del dia a extra (NULL si no recortado) y marca de EXTRA generada
-    # automaticamente por el reparto de jornada. Los escribe sv3 (revert +
-    # split en cada conciliacion); sv4 SOLO LEE.
-    horas_orig: Mapped[float | None] = mapped_column(Float)
-    extra_auto: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="false"
-    )
     hora_match_method: Mapped[str | None] = mapped_column(String(24))
 
     confianza_pct: Mapped[float | None] = mapped_column(Float)

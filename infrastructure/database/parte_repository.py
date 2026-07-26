@@ -119,6 +119,11 @@ class RegistroView:
     tiene_pdf: bool = False
     # True si la fecha del parte es posterior al mes en curso de su registro.
     es_futuro: bool = False
+    # --- Registro en Sigrid (aprobacion) --- #
+    sigrid_estado: Optional[str] = None        # registrado | omitido | None
+    sigrid_parte_cod: Optional[str] = None
+    sigrid_motivo: Optional[str] = None
+
     # --- Casado de PARTIDA (presupuesto) por sv3 --- #
     # Codigo de partida LEIDO del parte (J.310 rev. 1); None en rev. 0.
     partida_leida: Optional[str] = None
@@ -448,6 +453,21 @@ class ParteReviewRepository:
                     "ALTER TABLE parte_documents ADD COLUMN IF NOT EXISTS "
                     "sharepoint_drive_id VARCHAR(255)"
                 ))
+                # Trazabilidad del REGISTRO en Sigrid (lo escribe sv4 al
+                # aprobar; sv5 hace la escritura real en el ERP).
+                for _col in (
+                    "sigrid_registrado_at_utc VARCHAR(64)",
+                    "sigrid_registrado_by VARCHAR(255)",
+                    "sigrid_hmoide INTEGER",
+                    "sigrid_hmores_ide INTEGER",
+                    "sigrid_parte_cod VARCHAR(64)",
+                    "sigrid_estado VARCHAR(16)",
+                    "sigrid_motivo VARCHAR(255)",
+                ):
+                    conn.execute(text(
+                        "ALTER TABLE parte_registros ADD COLUMN IF NOT EXISTS "
+                        + _col
+                    ))
                 # Columnas del casado partida/recurso (las crea sv3; aqui de
                 # forma idempotente por si sv4 inicializa primero). SOLO LEE.
                 for col_ddl in (
@@ -647,12 +667,20 @@ class ParteReviewRepository:
             )
             regs = list(session.execute(stmt).scalars().all())
 
-        # Recursos SIN codigo de hora extra: sus horas no suman en la lista.
-        sin_extra: set[int] = set()
+        # Trabajadores SIN codigo de hora extra (por DNI): sus horas no
+        # suman en la lista.
+        dnis_sin_extra: set[str] = set()
         if sin_extra_resolver is not None:
-            _recs = {r.recurso_ide for r in regs if r.recurso_ide}
-            if _recs:
-                sin_extra = sin_extra_resolver(_recs) or set()
+            _trab = [
+                {"dni": r.empleado_dni or r.recurso_cif,
+                 "recurso_ide": r.recurso_ide}
+                for r in regs
+            ]
+            if _trab:
+                dnis_sin_extra = sin_extra_resolver(_trab) or set()
+
+        def _dni_norm(v):
+            return (v or "").replace("-", "").replace(" ", "").upper()
 
         groups: dict[str, dict[str, Any]] = {}
         for reg in regs:
@@ -677,7 +705,7 @@ class ParteReviewRepository:
             g["num_registros"] += 1
             if reg.es_incidencia:
                 g["num_incidencias"] += 1
-            elif reg.recurso_ide and reg.recurso_ide in sin_extra:
+            elif _dni_norm(reg.empleado_dni or reg.recurso_cif) in dnis_sin_extra:
                 pass  # trabajador SIN codigo de hora extra: no suma horas
             elif _is_extra(reg):
                 g["horas_extra"] += reg.horas or 0.0
@@ -800,12 +828,17 @@ class ParteReviewRepository:
                     "days": {},
                     "categoria": None,
                     "recurso_ide": None,
+                    "dni": None,
                 }
                 agg[wk] = w
             if w["categoria"] is None and reg.categoria:
                 w["categoria"] = reg.categoria
             if w["recurso_ide"] is None and reg.recurso_ide:
                 w["recurso_ide"] = reg.recurso_ide
+            if w["dni"] is None:
+                # DNI del empleado casado, o el CIF del recurso (suele ser
+                # el DNI); ancla fiable para resolver la hora extra.
+                w["dni"] = reg.empleado_dni or reg.recurso_cif
             slot = w["days"].setdefault(
                 reg.fecha, {"normal": 0.0, "extra": 0.0, "inc": [],
                            "doc": None, "pdf": False, "es_futuro": False,
@@ -837,12 +870,21 @@ class ParteReviewRepository:
                     "p": reg.partida_cod or reg.partida or None,
                 })
 
-        # Recursos SIN codigo de hora extra en Sigrid (fuente: reshor).
-        # Sus horas (ordinarias Y extras) NO cuentan en los totales.
-        recursos = {w["recurso_ide"] for w in agg.values() if w["recurso_ide"]}
-        sin_extra: set[int] = set()
-        if sin_extra_resolver is not None and recursos:
-            sin_extra = sin_extra_resolver(recursos) or set()
+        # Trabajadores SIN codigo de hora extra en Sigrid (fuente: reshor).
+        # Sus horas (ordinarias Y extras) NO cuentan en los totales. La
+        # resolucion se hace por DNI (ancla fiable) con respaldo del
+        # recurso_ide; el resolver devuelve el conjunto de DNIs sin extra.
+        trabajadores = [
+            {"dni": w.get("dni"), "recurso_ide": w.get("recurso_ide")}
+            for w in agg.values()
+        ]
+        dnis_sin_extra: set[str] = set()
+        if sin_extra_resolver is not None and trabajadores:
+            dnis_sin_extra = sin_extra_resolver(trabajadores) or set()
+
+        def _sin_extra(w) -> bool:
+            d = (w.get("dni") or "").replace("-", "").replace(" ", "").upper()
+            return bool(d) and d in dnis_sin_extra
 
         col_n = [0.0] * len(days)
         col_e = [0.0] * len(days)
@@ -851,9 +893,7 @@ class ParteReviewRepository:
         total_inc = 0
         rows: list[ObraMatrixRow] = []
         for wk, w in agg.items():
-            tiene_extra = not (
-                w["recurso_ide"] and w["recurso_ide"] in sin_extra
-            )
+            tiene_extra = not _sin_extra(w)
             cells: list[ObraMatrixCell] = []
             row_n = row_e = 0.0
             for dc in days:
@@ -1119,6 +1159,171 @@ class ParteReviewRepository:
             )
             return nuevo.id
 
+    # ------------------------------------------------------------------ #
+    # REGISTRO EN SIGRID (aprobacion). sv4 solo prepara y marca; la
+    # escritura la hace partes-transfer (sv5).
+    # ------------------------------------------------------------------ #
+
+    def lineas_para_registro(self, registro_ids: list[int]) -> dict[str, Any]:
+        """Payload para sv5: obra + lineas de esos registros (activos)."""
+        ids = sorted({int(i) for i in registro_ids if i})
+        if not ids:
+            return {"obra": {}, "lineas": []}
+        with self._session_factory.create_session() as session:
+            regs = list(session.execute(
+                select(ParteRegistroOrm)
+                .where(ParteRegistroOrm.id.in_(ids))
+                .where(ParteRegistroOrm.deleted_at_utc.is_(None))
+            ).scalars().all())
+            lineas: list[dict[str, Any]] = []
+            obra: dict[str, Any] = {}
+            for r in regs:
+                if not obra and (r.obra_ide or r.obra_codigo):
+                    obra = {"ide": r.obra_ide, "codigo": r.obra_codigo,
+                            "nombre": r.obra_nombre}
+                lineas.append({
+                    "registro_id": r.id,
+                    "fecha_int": int(r.fecha_int or 0),
+                    "recurso_ide": r.recurso_ide,
+                    "dni": r.empleado_dni,
+                    "nombre": r.empleado_nombre or r.trabajador_nombre_leido,
+                    "tipo_hora": r.tipo_hora,
+                    "es_incidencia": bool(r.es_incidencia),
+                    "horas": r.horas,
+                    "hora_ide": r.hora_ide,
+                    "hora_codigo": r.hora_codigo,
+                    "partida_ide": r.partida_ide,
+                    "partida_cod": r.partida_cod,
+                    "candef": r.hora_candef,
+                    "incidencia_codigo": r.incidencia_codigo,
+                    "incidencia_rol": (
+                        self._rol_incidencia(session, r)
+                        if r.es_incidencia else None
+                    ),
+                })
+            roles = {l["registro_id"]: l["incidencia_rol"]
+                     for l in lineas if l["es_incidencia"]}
+            if roles:
+                logger.info("[registro-payload] roles de incidencia: %s",
+                            roles)
+        return {"obra": obra, "lineas": lineas}
+
+    @staticmethod
+    def _rol_incidencia(session, reg: ParteRegistroOrm) -> str:
+        """Rol de una incidencia: 'inicio', 'fin' o 'intermedio'.
+
+        En Sigrid solo se registran el PRIMER dia de la racha (con su
+        codigo CI*) y el ULTIMO (fin); los INTERMEDIOS no se registran.
+        La racha se mira en el historico del trabajador cruzando partes y
+        obras, saltando dias sin lineas:
+          - hacia ATRAS: dia anterior con lineas trabajado (o sin
+            historico) -> candidata a inicio; con incidencia -> continua.
+          - hacia DELANTE: siguiente dia con lineas con incidencia ->
+            la racha sigue; trabajado o sin nada -> aqui termina.
+        inicio si el anterior fue trabajo; si no, intermedio cuando la
+        racha continua por delante, y fin cuando termina aqui. Un dia
+        suelto (trabajo antes y despues) es inicio, con su codigo.
+        """
+        if not reg.fecha_int:
+            return "inicio"
+        base = select(ParteRegistroOrm).where(
+            ParteRegistroOrm.deleted_at_utc.is_(None),
+            ParteRegistroOrm.fecha_int.isnot(None),
+        )
+        # Identidad del trabajador: DNI si lo hay; si no, empleado_ide.
+        if reg.empleado_dni:
+            base = base.where(
+                ParteRegistroOrm.empleado_dni == reg.empleado_dni)
+        elif reg.empleado_ide:
+            base = base.where(
+                ParteRegistroOrm.empleado_ide == reg.empleado_ide)
+        else:
+            return "inicio"
+
+        def _dia_es_incidencia(regs: list) -> bool:
+            # Si ese dia hubo CUALQUIER linea de trabajo, fue trabajado.
+            return not any(not p.es_incidencia for p in regs)
+
+        # --- hacia atras ---
+        previos = list(session.execute(
+            base.where(ParteRegistroOrm.fecha_int < int(reg.fecha_int))
+            .order_by(ParteRegistroOrm.fecha_int.desc()).limit(50)
+        ).scalars().all())
+        if previos:
+            ult = previos[0].fecha_int
+            atras_incidencia = _dia_es_incidencia(
+                [p for p in previos if p.fecha_int == ult])
+        else:
+            atras_incidencia = False
+
+        if not atras_incidencia:
+            return "inicio"
+
+        # --- hacia delante (solo si la racha viene de atras) ---
+        siguientes = list(session.execute(
+            base.where(ParteRegistroOrm.fecha_int > int(reg.fecha_int))
+            .order_by(ParteRegistroOrm.fecha_int.asc()).limit(50)
+        ).scalars().all())
+        if siguientes:
+            prim = siguientes[0].fecha_int
+            delante_incidencia = _dia_es_incidencia(
+                [p for p in siguientes if p.fecha_int == prim])
+        else:
+            delante_incidencia = False
+
+        return "intermedio" if delante_incidencia else "fin"
+
+    def registro_ids_de_obra(
+        self, obra_key: str, *, period_key: str | None = None,
+        mode: str = "nomina",
+    ) -> list[int]:
+        """Ids de los registros VISIBLES de una obra/periodo (para
+        'Aprobar todo'). Excluye borrados; INCLUYE incidencias (se
+        registran con su codigo CI*)."""
+        detail = self.get_obra(obra_key, period_key=period_key, mode=mode)
+        if detail is None:
+            return []
+        return [v.id for v in detail.registros]
+
+    def marcar_registros_sigrid(
+        self, *, escritas: list[dict], omitidas: list[dict],
+        ya_registradas: list[int], usuario: str | None,
+    ) -> int:
+        """Guarda la traza del registro en cada linea."""
+        ahora = datetime.now(timezone.utc).isoformat()
+        n = 0
+        with self._session_factory.create_session() as session:
+            for e in escritas or []:
+                reg = session.get(ParteRegistroOrm, int(e["registro_id"]))
+                if reg is None:
+                    continue
+                reg.sigrid_estado = "registrado"
+                reg.sigrid_registrado_at_utc = ahora
+                reg.sigrid_registrado_by = usuario
+                reg.sigrid_hmoide = e.get("hmoide")
+                reg.sigrid_hmores_ide = e.get("hmores_ide")
+                reg.sigrid_parte_cod = e.get("parte_cod")
+                reg.sigrid_motivo = None
+                n += 1
+            for o in omitidas or []:
+                reg = session.get(ParteRegistroOrm, int(o["registro_id"]))
+                if reg is None:
+                    continue
+                reg.sigrid_estado = "omitido"
+                reg.sigrid_registrado_at_utc = ahora
+                reg.sigrid_registrado_by = usuario
+                reg.sigrid_motivo = (o.get("motivo") or "")[:255]
+                n += 1
+            for rid in ya_registradas or []:
+                reg = session.get(ParteRegistroOrm, int(rid))
+                if reg is not None and not reg.sigrid_estado:
+                    reg.sigrid_estado = "registrado"
+                    reg.sigrid_registrado_at_utc = ahora
+                    n += 1
+            session.commit()
+        logger.info("[repo] traza de registro guardada en %s linea(s)", n)
+        return n
+
     def update_registro(
         self,
         *,
@@ -1176,6 +1381,26 @@ class ParteReviewRepository:
             )
             session.commit()
         return True
+
+    def aplicar_partida_recasada(
+        self, *, registro_id: int, partida: dict | None,
+        metodo: str | None, score: float | None,
+    ) -> None:
+        """Fija la partida re-casada tras un cambio de obra (o la deja en
+        blanco si no hubo match). Sin undo propio: el undo del cambio de
+        obra ya restaura el estado anterior completo."""
+        with self._session_factory.create_session() as session:
+            reg = session.get(ParteRegistroOrm, registro_id)
+            if reg is None:
+                return
+            if partida:
+                reg.partida_ide = partida.get("ide")
+                reg.partida_cod = partida.get("cod")
+                reg.partida_res = partida.get("res")
+                reg.partida_capitulo = partida.get("capitulo")
+                reg.partida_match_method = metodo
+                reg.partida_match_score = score
+            session.commit()
 
     def set_registro_partida(
         self,
@@ -1640,7 +1865,11 @@ class ParteReviewRepository:
         obra_ide: int | None,
         obra_codigo: str | None,
         obra_nombre: str | None,
-    ) -> bool:
+    ) -> list[dict] | None:
+        """Cambia la obra del parte (y de sus registros). Devuelve la lista
+        de partidas a RE-CASAR contra la obra nueva (None si el parte no
+        existe): los ide de partida del presupuesto viejo no valen en el
+        nuevo aunque el codigo coincida."""
         with self._session_factory.create_session() as session:
             doc = session.get(ParteDocumentOrm, document_id)
             if doc is None:
@@ -1652,17 +1881,36 @@ class ParteReviewRepository:
             doc.obra_nombre = obra_nombre
             doc.obra_match_method = "manual"
             doc.obra_match_score = 1.0
+            objetivos: list[dict] = []
             for reg in doc.registros:
                 reg.obra_ide = obra_ide
                 reg.obra_codigo = obra_codigo
                 reg.obra_nombre = obra_nombre
+                # La partida pertenece al presupuesto de la obra ANTERIOR:
+                # su ide (paride) no vale en la nueva aunque el codigo
+                # coincida. Se limpia y se re-casa contra la obra nueva.
+                if reg.partida_ide or reg.partida_cod or reg.partida:
+                    objetivos.append({
+                        "registro_id": reg.id,
+                        # criterio de re-casado: la leida del parte si
+                        # existe; si no, el codigo que tenia asignado.
+                        "objetivo_cod": reg.partida or reg.partida_cod,
+                        "metodo_previo": reg.partida_match_method,
+                        "score_previo": reg.partida_match_score,
+                    })
+                reg.partida_ide = None
+                reg.partida_cod = None
+                reg.partida_res = None
+                reg.partida_capitulo = None
+                reg.partida_match_method = None
+                reg.partida_match_score = None
             self._record_undo(
                 session, action="parte_obra",
                 description=f"Cambiar obra del parte → {obra_codigo or obra_nombre or '?'}",
                 documents=[doc_snap], registros=reg_snaps,
             )
             session.commit()
-        return True
+        return objetivos
 
     # ----------------------------------------------------------------- #
     # Estado del parte (documento).
@@ -1919,6 +2167,8 @@ class ParteReviewRepository:
         partida_match_method: str | None = None,
         partida_match_score: float | None = None,
         hora_normal=None, hora_extra=None,
+        incidencia_codigo: str | None = None,
+        hora_incidencia=None,
         by: str | None = None,
     ) -> dict:
         """Crea lineas de parte para una lista de dias (ISO). Por cada dia
@@ -1928,15 +2178,19 @@ class ParteReviewRepository:
         now_iso = datetime.now(timezone.utc).isoformat()
         docs_creados = 0
         lineas = 0
+        # Horas e incidencia son EXCLUYENTES (lo valida tambien el endpoint).
+        incidencia = (incidencia_codigo or "").strip().upper() or None
         tipos: list[tuple[str, float]] = []
-        if horas_ordinaria and float(horas_ordinaria) > 0:
-            tipos.append(("normal", float(horas_ordinaria)))
-        # La extra admite valores NEGATIVOS (ajuste de jornada: viernes
-        # tipico ordinaria 8 y extra -2); solo se descarta el 0.
-        if horas_extra and abs(float(horas_extra)) > 1e-9:
-            tipos.append(("extra", float(horas_extra)))
-        if not tipos:
-            return {"documentos": 0, "lineas": 0, "error": "Sin horas que crear."}
+        if not incidencia:
+            if horas_ordinaria and float(horas_ordinaria) > 0:
+                tipos.append(("normal", float(horas_ordinaria)))
+            # La extra admite valores NEGATIVOS (ajuste de jornada: viernes
+            # tipico ordinaria 8 y extra -2); solo se descarta el 0.
+            if horas_extra and abs(float(horas_extra)) > 1e-9:
+                tipos.append(("extra", float(horas_extra)))
+        if not tipos and not incidencia:
+            return {"documentos": 0, "lineas": 0,
+                    "error": "Sin horas ni incidencia que crear."}
 
         with self._session_factory.create_session() as session:
             for iso in dias:
@@ -1977,6 +2231,43 @@ class ParteReviewRepository:
                     )
                 ).scalar()
                 nli = (maxli if maxli is not None else -1) + 1
+                if incidencia:
+                    hm = hora_incidencia
+                    session.add(ParteRegistroOrm(
+                        document_id=doc.id, line_index=nli, empleado_line_no=1,
+                        categoria=categoria,
+                        trabajador_nombre_leido=empleado_nombre,
+                        empleado_ide=empleado_ide, empleado_codigo=empleado_codigo,
+                        empleado_nombre=empleado_nombre, empleado_dni=empleado_dni,
+                        empleado_reside=empleado_reside,
+                        fecha=iso, fecha_int=fint,
+                        obra_codigo=obra_codigo, obra_nombre=obra_nombre,
+                        obra_ide=obra_ide,
+                        tipo_hora=incidencia, horas=None,
+                        es_incidencia=True, incidencia_codigo=incidencia,
+                        recurso_ide=empleado_reside,
+                        recurso_cif=empleado_dni,
+                        hora_ide=(hm.ide if hm else None),
+                        hora_codigo=(hm.codigo if hm else None),
+                        hora_descripcion=(hm.descripcion if hm else None),
+                        hora_ext=(hm.ext if hm else None),
+                        hora_precio_coste=(hm.pre if hm else None),
+                        hora_precio_nomina=(hm.prenom if hm else None),
+                        hora_match_method=(hm.method if hm else None),
+                        partida_ide=partida_ide, partida_cod=partida_cod,
+                        partida_res=partida_res, partida_capitulo=partida_capitulo,
+                        partida_match_method=(
+                            partida_match_method
+                            or ("manual" if partida_ide else None)
+                        ),
+                        partida_match_score=(
+                            partida_match_score
+                            if partida_match_score is not None
+                            else (1.0 if partida_ide else None)
+                        ),
+                    ))
+                    nli += 1
+                    lineas += 1
                 for tipo, horas in tipos:
                     hm = hora_extra if tipo == "extra" else hora_normal
                     session.add(ParteRegistroOrm(
@@ -1990,6 +2281,8 @@ class ParteReviewRepository:
                         obra_codigo=obra_codigo, obra_nombre=obra_nombre,
                         obra_ide=obra_ide,
                         tipo_hora=tipo, horas=horas, es_incidencia=False,
+                        recurso_ide=empleado_reside,
+                        recurso_cif=empleado_dni,
                         hora_ide=(hm.ide if hm else None),
                         hora_codigo=(hm.codigo if hm else None),
                         hora_descripcion=(hm.descripcion if hm else None),
@@ -2082,6 +2375,9 @@ def _registro_view(reg: ParteRegistroOrm) -> RegistroView:
             and doc.sharepoint_item_id
         ),
         es_futuro=_doc_es_futuro(doc),
+        sigrid_estado=reg.sigrid_estado,
+        sigrid_parte_cod=reg.sigrid_parte_cod,
+        sigrid_motivo=reg.sigrid_motivo,
         partida_leida=reg.partida,
         partida_cod=reg.partida_cod,
         partida_res=reg.partida_res,

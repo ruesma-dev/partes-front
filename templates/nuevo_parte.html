@@ -33,6 +33,7 @@
       </div>
       <input type="hidden" id="emp-ide"><input type="hidden" id="emp-codigo">
       <input type="hidden" id="emp-nombre"><input type="hidden" id="emp-dni">
+      <input type="hidden" id="emp-reside">
     </div>
 
     <div class="field">
@@ -59,6 +60,20 @@
         <label>Horas extra</label>
         <input type="number" id="horas-extra" class="input" step="0.5" value="0" title="Admite negativos (p. ej. viernes: 8 y -2)">
       </div>
+    </div>
+
+    <div class="field">
+      <label>Incidencia <span class="muted">(excluyente con las horas)</span></label>
+      <select id="incidencia" class="input" title="Si eliges incidencia, las horas se ponen a 0; si pones horas, la incidencia se bloquea">
+        <option value="">— Sin incidencia —</option>
+        <option value="V">V · Vacaciones</option>
+        <option value="B">B · Baja enfermedad común</option>
+        <option value="AT">AT · Accidente / Enf. profesional</option>
+        <option value="FJ">FJ · Falta justificada / Permiso</option>
+        <option value="F">F · Falta injustificada</option>
+        <option value="H">H · Huelga</option>
+        <option value="M">M · Maternidad / Paternidad</option>
+      </select>
     </div>
 
     <div class="nuevo-sel">

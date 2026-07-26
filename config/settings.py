@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     sigrid_api_timeout_s: float = Field(30.0, alias="SIGRID_API_TIMEOUT_S")
 
     # ------------------------------------------------------------ #
+    # partes-transfer (sv5) — registro de los partes APROBADOS en
+    # Sigrid. sv4 NO escribe en Sigrid: delega en este servicio.
+    # ------------------------------------------------------------ #
+    transfer_base_url: str | None = Field(None, alias="TRANSFER_BASE_URL")
+    transfer_timeout_s: float = Field(120.0, alias="TRANSFER_TIMEOUT_S")
+
+    # ------------------------------------------------------------ #
     # Microsoft Graph — visor del PDF del parte (descarga desde
     # SharePoint el archivo subido por sv3). Solo lectura.
     # ------------------------------------------------------------ #
@@ -110,6 +117,10 @@ class Settings(BaseSettings):
             and (self.sigrid_api_function_key or "").strip()
             and (self.sigrid_api_database or "").strip()
         )
+
+    @property
+    def transfer_enabled(self) -> bool:
+        return bool((self.transfer_base_url or "").strip())
 
     @property
     def preview_enabled(self) -> bool:

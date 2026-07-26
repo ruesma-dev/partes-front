@@ -1136,9 +1136,41 @@
       var obraOk = !!(document.getElementById("obra-ide").value
         || document.getElementById("obra-codigo").value);
       var empOk = !!document.getElementById("emp-nombre").value;
+      // Horas e incidencia son EXCLUYENTES: hace falta una de las dos.
+      var inc = document.getElementById("incidencia");
+      var incVal = inc ? inc.value : "";
+      var hayHoras = _hayHoras();
       document.getElementById("crear-btn").disabled =
-        !(countSel() > 0 && obraOk && empOk);
+        !(countSel() > 0 && obraOk && empOk && (hayHoras || incVal));
     }
+    function _hayHoras() {
+      var ord = parseFloat(document.getElementById("horas-ord").value) || 0;
+      var ext = parseFloat(document.getElementById("horas-extra").value) || 0;
+      return ord !== 0 || ext !== 0;
+    }
+    function wireIncidencia() {
+      var inc = document.getElementById("incidencia");
+      if (!inc) return;
+      var ord = document.getElementById("horas-ord");
+      var ext = document.getElementById("horas-extra");
+      function sync() {
+        if (inc.value) {
+          // Incidencia elegida: las horas se anulan y bloquean.
+          ord.value = 0; ext.value = 0;
+          ord.disabled = true; ext.disabled = true;
+        } else {
+          ord.disabled = false; ext.disabled = false;
+        }
+        // Horas con valor: la incidencia se bloquea.
+        inc.disabled = !inc.value && _hayHoras();
+        updateBtn();
+      }
+      inc.addEventListener("change", sync);
+      ord.addEventListener("input", sync);
+      ext.addEventListener("input", sync);
+      sync();
+    }
+    wireIncidencia();
     function clickDay(isoStr) {
       var mode = (document.querySelector("input[name=cal-mode]:checked") || {}).value;
       if (mode === "rango") {
@@ -1218,6 +1250,8 @@
         document.getElementById("emp-codigo").value = e.codigo || "";
         document.getElementById("emp-nombre").value = e.nombre || "";
         document.getElementById("emp-dni").value = e.dni || "";
+        document.getElementById("emp-reside").value =
+          e.reside != null ? e.reside : "";
         // Categoria: viene del trabajador en Sigrid (campo bloqueado).
         document.getElementById("categoria").value = e.categoria || "";
         // Sugerir la jornada por defecto del trabajador (editable).
@@ -1230,6 +1264,7 @@
     document.getElementById("crear-btn").addEventListener("click", function () {
       var btn = this;
       var dias = Object.keys(selected).sort();
+      var incSel = (document.getElementById("incidencia") || {}).value || "";
       var payload = {
         obra_ide: document.getElementById("obra-ide").value || null,
         obra_codigo: document.getElementById("obra-codigo").value || null,
@@ -1238,10 +1273,14 @@
         empleado_codigo: document.getElementById("emp-codigo").value || null,
         empleado_nombre: document.getElementById("emp-nombre").value || null,
         empleado_dni: document.getElementById("emp-dni").value || null,
+        empleado_reside: document.getElementById("emp-reside").value || null,
         categoria: document.getElementById("categoria").value || null,
         dias: dias,
-        horas_ordinaria: document.getElementById("horas-ord").value || 0,
-        horas_extra: document.getElementById("horas-extra").value || 0,
+        horas_ordinaria: incSel ? 0
+          : (document.getElementById("horas-ord").value || 0),
+        horas_extra: incSel ? 0
+          : (document.getElementById("horas-extra").value || 0),
+        incidencia_codigo: incSel || null,
         partida_ide: document.getElementById("partida-ide").value || null,
         partida_cod: document.getElementById("partida-cod").value || null,
         partida_res: document.getElementById("partida-res").value || null,
@@ -2098,5 +2137,354 @@
       if (first) { first.focus(); first.select(); }
       ev.stopPropagation();
     });
+  });
+})();
+
+
+/* ==================================================================== *
+ * APROBAR -> registrar en Sigrid (via partes-transfer, sv5).
+ * Flujo: preflight -> si hay conflictos, modal de confirmacion
+ * ("pisar o no") -> ejecutar. Boton por linea y "Aprobar todo".
+ * ==================================================================== */
+(function () {
+  "use strict";
+
+  function ready(fn) {
+    if (document.readyState !== "loading") fn();
+    else document.addEventListener("DOMContentLoaded", fn);
+  }
+
+  function post(url, body) {
+    return fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(body || {}),
+    }).then(function (r) {
+      return r.json().catch(function () {
+        return { ok: false, error: "respuesta no valida (HTTP " + r.status + ")" };
+      });
+    });
+  }
+
+  function fechaLegible(fint) {
+    var s = String(fint || "");
+    if (s.length !== 8) return s;
+    return s.slice(6, 8) + "/" + s.slice(4, 6) + "/" + s.slice(0, 4);
+  }
+
+  function num(v) {
+    return (v === null || v === undefined) ? "" : v;
+  }
+
+  // ---------------- modal ---------------- //
+  var overlay = null;
+
+  function cerrar() {
+    if (overlay) { overlay.remove(); overlay = null; }
+  }
+
+  function modal(titulo, cuerpoHtml, acciones) {
+    cerrar();
+    overlay = document.createElement("div");
+    overlay.className = "ap-overlay";
+    var caja = document.createElement("div");
+    caja.className = "ap-modal";
+    var h = document.createElement("div");
+    h.className = "ap-title";
+    h.textContent = titulo;
+    var c = document.createElement("div");
+    c.className = "ap-body";
+    c.innerHTML = cuerpoHtml;
+    var pie = document.createElement("div");
+    pie.className = "ap-actions";
+    (acciones || []).forEach(function (a) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "btn " + (a.clase || "secondary");
+      b.textContent = a.texto;
+      b.addEventListener("click", function () { a.onClick(caja, b); });
+      pie.appendChild(b);
+    });
+    caja.appendChild(h); caja.appendChild(c); caja.appendChild(pie);
+    overlay.appendChild(caja);
+    document.body.appendChild(overlay);
+    overlay.addEventListener("click", function (ev) {
+      if (ev.target === overlay) cerrar();
+    });
+    return caja;
+  }
+
+  function resumenHtml(pf) {
+    var r = pf.resumen || {};
+    var partes = (pf.partes || []).map(function (p) {
+      var mes = String(p.mes).padStart(2, "0");
+      return p.existe
+        ? "<li>Parte <strong>" + (p.cod || "?") + "</strong> (" + mes + "/" + p.ano + "): ya existe</li>"
+        : "<li>Parte <strong>" + (p.cod || "?") + "</strong> (" + mes + "/" + p.ano + "): <em>se creara</em></li>";
+    }).join("");
+    var aviso = pf.forzada_pruebas
+      ? '<p class="ap-warn">MODO PRUEBAS: se escribira en la obra <strong>'
+        + (pf.obra_destino && pf.obra_destino.codigo) + " · "
+        + ((pf.obra_destino && pf.obra_destino.nombre) || "")
+        + "</strong>, ignorando la obra del parte.</p>"
+      : "";
+    var omitidas = (pf.acciones || []).filter(function (a) {
+      return a.accion === "omitir";
+    });
+    var omHtml = "";
+    if (omitidas.length) {
+      omHtml = "<p><strong>No se registran " + omitidas.length
+        + " linea(s):</strong></p><ul class='ap-list'>"
+        + omitidas.map(function (a) {
+            return "<li>" + (a.nombre || "?") + " · " + fechaLegible(a.fecha_int)
+              + " — " + (a.motivo || "") + "</li>";
+          }).join("") + "</ul>";
+    }
+    return aviso
+      + "<ul class='ap-list'>" + partes + "</ul>"
+      + "<p>Se registraran <strong>" + (r.escribir || 0) + "</strong> linea(s)."
+      + (r.ya_registrado ? " Ya registradas: " + r.ya_registrado + "." : "")
+      + "</p>" + omHtml;
+  }
+
+  function conflictosHtml(conflictos) {
+    return "<p class='ap-warn'>Ya hay lineas en Sigrid con el <strong>mismo "
+      + "codigo de hora</strong> para ese parte, recurso y fecha. Marca las "
+      + "que quieras <strong>pisar</strong> (se borra la linea actual y se "
+      + "escribe la nueva). Las lineas con OTRO codigo de ese dia no se "
+      + "tocan.</p>"
+      + conflictos.map(function (c) {
+          var nuevoTxt = num(c.nueva_can) + " h · " + num(c.nueva_tot) + " €";
+          var detalle = "";
+          if ((c.nuevas || []).length > 1) {
+            detalle = " <span class='ap-mini'>(" + c.nuevas.map(function (n) {
+              return num(n.can) + " h" + (n.partida_cod ? " " + n.partida_cod : "");
+            }).join(" + ") + ")</span>";
+          }
+          // Lineas que SE PISAN, con la comparacion a la derecha.
+          var lineas = (c.lineas || []).map(function (l) {
+            return "<li><span class='ap-old'>linea " + l.ide + " · "
+              + (l.hora_codigo || "?") + " · " + num(l.can) + " h · "
+              + num(l.tot) + " €"
+              + (l.nuestra ? " <em>(escrita por esta app)</em>" : "")
+              + "</span> <span class='ap-arrow'>→</span> "
+              + "<span class='ap-new'>actualizacion a " + nuevoTxt + "</span>"
+              + detalle + "</li>";
+          }).join("");
+          // Lineas de ese dia con OTRO codigo: informativas.
+          var ctx = "";
+          if ((c.contexto || []).length) {
+            ctx = "<div class='ap-ctx'>Otras lineas de ese dia que <strong>no "
+              + "se tocan</strong>:<ul class='ap-list'>"
+              + c.contexto.map(function (l) {
+                  return "<li>linea " + l.ide + " · " + (l.hora_codigo || "?")
+                    + " · " + num(l.can) + " h · " + num(l.tot) + " €</li>";
+                }).join("") + "</ul></div>";
+          }
+          return "<div class='ap-conf'><label><input type='checkbox' "
+            + "class='ap-pisar' value='" + c.clave + "' checked> "
+            + "<strong>" + (c.nombre || ("recurso " + c.recurso_ide)) + "</strong> · "
+            + fechaLegible(c.fecha_int) + " · parte " + (c.parte_cod || "?")
+            + " · <strong>" + (c.hora_codigo || "?") + "</strong>"
+            + "</label><ul class='ap-list'>" + lineas + "</ul>" + ctx + "</div>";
+        }).join("");
+  }
+
+  function resultadoHtml(r) {
+    var partes = (r.partes || []).filter(function (p) { return p.creado; })
+      .map(function (p) { return p.cod; });
+    var html = "<p><strong>" + (r.escritas || []).length
+      + "</strong> linea(s) registradas en Sigrid.</p>";
+    if (partes.length) {
+      html += "<p>Parte(s) creado(s): <strong>" + partes.join(", ")
+        + "</strong></p>";
+    }
+    if (r.borradas) {
+      html += "<p>" + r.borradas + " linea(s) anteriores borradas (pisadas).</p>";
+    }
+    if ((r.omitidas || []).length) {
+      html += "<p>" + r.omitidas.length + " linea(s) no registradas (reglas).</p>";
+    }
+    if ((r.ya_registradas || []).length) {
+      html += "<p>" + r.ya_registradas.length
+        + " linea(s) ya estaban registradas (no se duplican).</p>";
+    }
+    if ((r.escritas || []).length) {
+      html += "<ul class='ap-list'>" + r.escritas.map(function (e) {
+        return "<li>" + (e.parte_cod || "") + " · " + (e.hora_codigo || "")
+          + " · " + num(e.can) + " h → linea " + (e.hmores_ide || "?") + "</li>";
+      }).join("") + "</ul>";
+    }
+    return html;
+  }
+
+  function ejecutar(peticion, pisarClaves, caja, boton) {
+    if (boton) { boton.disabled = true; boton.textContent = "Registrando…"; }
+    var body = Object.assign({}, peticion, { pisar_claves: pisarClaves || [] });
+    return post("/api/aprobar/ejecutar", body).then(function (r) {
+      if (!r.ok) {
+        modal("No se pudo registrar",
+              "<p class='ap-warn'>" + (r.error || "error desconocido") + "</p>",
+              [{ texto: "Cerrar", onClick: cerrar }]);
+        return;
+      }
+      var pend = r.pendientes_confirmacion || [];
+      var html = resultadoHtml(r);
+      if (pend.length) {
+        html += "<hr>" + conflictosHtml(pend);
+        modal("Registro en Sigrid", html, [
+          { texto: "Pisar las marcadas", clase: "ok", onClick: function (cj, b) {
+              var claves = Array.prototype.slice.call(
+                cj.querySelectorAll(".ap-pisar:checked")).map(function (i) {
+                  return i.value;
+                });
+              if (!claves.length) { cerrar(); window.location.reload(); return; }
+              ejecutar(peticion, claves, cj, b);
+            } },
+          { texto: "Dejarlo asi", onClick: function () {
+              cerrar(); window.location.reload();
+            } },
+        ]);
+      } else {
+        modal("Registro en Sigrid", html, [
+          { texto: "Cerrar", clase: "ok", onClick: function () {
+              cerrar(); window.location.reload();
+            } },
+        ]);
+      }
+    }).catch(function (e) {
+      modal("Error de red", "<p class='ap-warn'>" + e + "</p>",
+            [{ texto: "Cerrar", onClick: cerrar }]);
+    });
+  }
+
+  function aprobar(peticion) {
+    modal("Comprobando en Sigrid…", "<p>Analizando el parte, el mes y las "
+          + "lineas existentes…</p>", []);
+    post("/api/aprobar/preflight", peticion).then(function (pf) {
+      if (!pf.ok) {
+        modal("No se puede registrar",
+              "<p class='ap-warn'>" + (pf.error || "error desconocido") + "</p>",
+              [{ texto: "Cerrar", onClick: cerrar }]);
+        return;
+      }
+      var conflictos = pf.conflictos || [];
+      var html = resumenHtml(pf);
+      if (conflictos.length) html += "<hr>" + conflictosHtml(conflictos);
+      modal(conflictos.length ? "Confirmar: hay lineas que se pisarian"
+                              : "Confirmar registro en Sigrid",
+        html, [
+          { texto: conflictos.length ? "Registrar (pisando las marcadas)"
+                                     : "Registrar", clase: "ok",
+            onClick: function (cj, b) {
+              var claves = Array.prototype.slice.call(
+                cj.querySelectorAll(".ap-pisar:checked")).map(function (i) {
+                  return i.value;
+                });
+              ejecutar(peticion, claves, cj, b);
+            } },
+          { texto: "Cancelar", onClick: cerrar },
+        ]);
+    }).catch(function (e) {
+      modal("Error de red", "<p class='ap-warn'>" + e + "</p>",
+            [{ texto: "Cerrar", onClick: cerrar }]);
+    });
+  }
+
+  ready(function () {
+    document.addEventListener("click", function (ev) {
+      var linea = ev.target.closest(".aprobar-linea");
+      if (linea) {
+        ev.preventDefault();
+        aprobar({ registro_ids: [parseInt(linea.dataset.registroId, 10)] });
+        return;
+      }
+      var todo = ev.target.closest("#aprobar-todo");
+      if (todo) {
+        ev.preventDefault();
+        if (todo.dataset.obraKey) {
+          // Vista de OBRA: el servidor resuelve las lineas del periodo.
+          aprobar({ obra_key: todo.dataset.obraKey,
+                    period: todo.dataset.period || null,
+                    mode: todo.dataset.mode || "nomina" });
+          return;
+        }
+        // Vista de TRABAJADOR: aprueba lo VISIBLE en la tabla (respeta el
+        // filtro de dias del calendario y los filtros de columna), sin
+        // incidencias.
+        var ids = [];
+        document.querySelectorAll(
+          "#lines-table tbody tr[data-registro-id]"
+        ).forEach(function (tr) {
+          if (tr.classList.contains("filtered-day")) return;
+          if (tr.style.display === "none") return;
+          ids.push(parseInt(tr.dataset.registroId, 10));
+        });
+        if (!ids.length) {
+          aprobar({ registro_ids: [] });  // el backend respondera con el aviso
+          return;
+        }
+        aprobar({ registro_ids: ids });
+      }
+    });
+  });
+})();
+
+
+/* ==================================================================== *
+ * Barra de scroll horizontal DUPLICADA encima de las tablas anchas
+ * (matriz y lineas del periodo): evita tener que bajar al final de la
+ * pagina para desplazarse a la derecha. Sincronizada en ambos sentidos.
+ * ==================================================================== */
+(function () {
+  "use strict";
+
+  function ready(fn) {
+    if (document.readyState !== "loading") fn();
+    else document.addEventListener("DOMContentLoaded", fn);
+  }
+
+  function anadirBarra(el) {
+    if (!el || el.dataset.topScroll === "1") return;
+    el.dataset.topScroll = "1";
+    var bar = document.createElement("div");
+    bar.className = "scroll-top";
+    var inner = document.createElement("div");
+    bar.appendChild(inner);
+    el.parentNode.insertBefore(bar, el);
+
+    function sync() {
+      inner.style.width = el.scrollWidth + "px";
+      bar.style.display = (el.scrollWidth > el.clientWidth + 2)
+        ? "block" : "none";
+    }
+    sync();
+    window.addEventListener("resize", sync);
+    if (window.ResizeObserver) {
+      try { new ResizeObserver(sync).observe(el); } catch (e) { /* noop */ }
+    }
+    // Re-medir cuando la tabla cambie (filtros, filas ocultas...).
+    if (window.MutationObserver) {
+      try {
+        new MutationObserver(sync).observe(el, {
+          childList: true, subtree: true, attributes: true,
+        });
+      } catch (e) { /* noop */ }
+    }
+
+    var lock = false;
+    bar.addEventListener("scroll", function () {
+      if (lock) return;
+      lock = true; el.scrollLeft = bar.scrollLeft; lock = false;
+    });
+    el.addEventListener("scroll", function () {
+      if (lock) return;
+      lock = true; bar.scrollLeft = el.scrollLeft; lock = false;
+    });
+  }
+
+  ready(function () {
+    document.querySelectorAll(".table-scroll, .matrix-scroll")
+      .forEach(anadirBarra);
   });
 })();

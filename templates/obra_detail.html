@@ -13,6 +13,15 @@
             data-obra-codigo="{{ detail.obra_codigo or '' }}"
             data-obra-nombre="{{ detail.obra_nombre or '' }}"
             data-obra-label="{% if detail.obra_codigo %}{{ detail.obra_codigo }} · {% endif %}{{ detail.obra_nombre or '' }}">+ Añadir línea</button>
+    {% if transfer_enabled %}
+    <button type="button" class="btn ok" id="aprobar-todo"
+            data-obra-key="{{ detail.obra_key }}"
+            data-period="{{ detail.period_key or '' }}"
+            data-mode="{{ detail.mode or 'nomina' }}"
+            title="Registrar en Sigrid todas las lineas del periodo">
+      ✓ Aprobar todo
+    </button>
+    {% endif %}
     <a class="btn secondary" href="/obras">← Obras</a>
     <button type="button" class="btn danger" data-del-obra="{{ obra_key }}"
             data-label="{% if detail.obra_codigo %}{{ detail.obra_codigo }} · {% endif %}{{ detail.obra_nombre or '' }}"
@@ -153,6 +162,7 @@
         <th>Partida (imputacion)</th>
         <th>Recurso / Parte</th>
         <th>Firma parte</th>
+        {% if transfer_enabled %}<th>Sigrid</th>{% endif %}
         {% if preview_enabled %}<th>Parte</th>{% endif %}
       </tr>
       <tr class="filter-row">
@@ -165,6 +175,7 @@
         <th><input class="col-filter" type="text" placeholder="Codigo…"></th>
         <th><input class="col-filter" type="text" placeholder="Partida…"></th>
         <th><input class="col-filter" type="text" placeholder="Recurso…"></th>
+        {% if transfer_enabled %}<th></th>{% endif %}
         <th><button type="button" class="filter-clear">Limpiar</button></th>
         {% if preview_enabled %}<th></th>{% endif %}
       </tr>
@@ -241,6 +252,18 @@
           {% endif %}
           {% if r.parte_aprobado %}<span class="badge ok">Aprobado</span>{% endif %}
         </td>
+        {% if transfer_enabled %}
+        <td class="cell-sigrid">
+          {% if r.sigrid_estado == 'registrado' %}
+            <span class="badge ok" title="Registrado en Sigrid{% if r.sigrid_parte_cod %} · parte {{ r.sigrid_parte_cod }}{% endif %}">✓ {{ r.sigrid_parte_cod or 'registrado' }}</span>
+          {% elif r.sigrid_estado == 'omitido' %}
+            <span class="badge warn" title="{{ r.sigrid_motivo or 'No se registra' }}">omitido</span>
+            <button type="button" class="btn small aprobar-linea" data-registro-id="{{ r.id }}" title="Reintentar el registro de esta linea">↻</button>
+          {% else %}
+            <button type="button" class="btn small ok aprobar-linea" data-registro-id="{{ r.id }}" title="Registrar esta linea en Sigrid">Aprobar</button>
+          {% endif %}
+        </td>
+        {% endif %}
         {% if preview_enabled %}
         <td class="cell-parte">
           {% if r.tiene_pdf %}
